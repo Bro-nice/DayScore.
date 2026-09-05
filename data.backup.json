@@ -1,0 +1,506 @@
+{
+  "users": {
+    "dayscore_ai@reflect.edu": {
+      "email": "dayscore_ai@reflect.edu",
+      "username": "dayscore_ai",
+      "displayName": "DayScore AI Coach ✨",
+      "bio": "Empathetic & Logical Daily Reflection Mentor 💜. Here to listen, encourage, and help you structure your goals logically!",
+      "avatarUrl": "https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear",
+      "theme": "dark",
+      "language": "English",
+      "settings": {
+        "notifications": true,
+        "aiCoachingLevel": "deep",
+        "isProfilePublic": true,
+        "showOnlineStatus": true
+      },
+      "stats": {
+        "averageScore": 98,
+        "highestScore": 100,
+        "longestStreak": 365,
+        "currentStreak": 365,
+        "totalStudyHours": 1200,
+        "lastActiveDate": "2026-07-26"
+      },
+      "achievements": [
+        "reflection_rookie",
+        "streak_master",
+        "perfect_score"
+      ]
+    },
+    "lukas@reflect.edu": {
+      "email": "lukas@reflect.edu",
+      "username": "lukas_codes",
+      "displayName": "Lukas Weber",
+      "bio": "CS sophomore 💻. Sleep is just a time-out. Building compilers & sipping espresso.",
+      "avatarUrl": "https://api.dicebear.com/7.x/bottts/svg?seed=Qorvin&backgroundColor=1e293b,0f172a&backgroundType=gradientLinear",
+      "theme": "dark",
+      "language": "English",
+      "settings": {
+        "notifications": true,
+        "aiCoachingLevel": "deep",
+        "isProfilePublic": true,
+        "showOnlineStatus": true
+      },
+      "stats": {
+        "averageScore": 84,
+        "highestScore": 95,
+        "longestStreak": 12,
+        "currentStreak": 8,
+        "totalStudyHours": 42.5,
+        "lastActiveDate": "2026-07-18"
+      },
+      "achievements": [
+        "reflection_rookie",
+        "study_marathoner"
+      ]
+    },
+    "emma@reflect.edu": {
+      "email": "emma@reflect.edu",
+      "username": "emma_grinds",
+      "displayName": "Emma Watson",
+      "bio": "Pre-Med Bio major 🩺. Pomodoro enthusiast & coffee dependent ☕. Always studying.",
+      "avatarUrl": "https://api.dicebear.com/7.x/adventurer/svg?seed=Twiblo&backgroundColor=831843,9d174d&backgroundType=gradientLinear",
+      "theme": "light",
+      "language": "English",
+      "settings": {
+        "notifications": true,
+        "aiCoachingLevel": "standard",
+        "isProfilePublic": true,
+        "showOnlineStatus": true
+      },
+      "stats": {
+        "averageScore": 89,
+        "highestScore": 98,
+        "longestStreak": 21,
+        "currentStreak": 15,
+        "totalStudyHours": 68.2,
+        "lastActiveDate": "2026-07-18"
+      },
+      "achievements": [
+        "reflection_rookie",
+        "streak_master",
+        "study_marathoner"
+      ]
+    },
+    "yuki@reflect.edu": {
+      "email": "yuki@reflect.edu",
+      "username": "yuki_zen",
+      "displayName": "Yuki Tanaka",
+      "bio": "Daily mindfulness & organic chem 🧘‍♀️. Consistent reflection is key to growth.",
+      "avatarUrl": "https://api.dicebear.com/7.x/adventurer/svg?seed=Rivva&backgroundColor=0284c7,38bdf8&backgroundType=gradientLinear",
+      "theme": "system",
+      "language": "Japanese",
+      "settings": {
+        "notifications": false,
+        "aiCoachingLevel": "aggressive",
+        "isProfilePublic": true,
+        "showOnlineStatus": true
+      },
+      "stats": {
+        "averageScore": 92,
+        "highestScore": 100,
+        "longestStreak": 30,
+        "currentStreak": 24,
+        "totalStudyHours": 35,
+        "lastActiveDate": "2026-07-18"
+      },
+      "achievements": [
+        "reflection_rookie",
+        "streak_master",
+        "perfect_score"
+      ]
+    },
+    "aarogya13@gmail.com": {
+      "email": "aarogya13@gmail.com",
+      "username": "aarogya13",
+      "displayName": "Aarogya13",
+      "bio": "Just another passionate student reflecting on their growth! 🌱",
+      "avatarUrl": "https://api.dicebear.com/7.x/adventurer/svg?seed=aarogya13",
+      "theme": "light",
+      "language": "English",
+      "settings": {
+        "notifications": true,
+        "aiCoachingLevel": "standard",
+        "isProfilePublic": true,
+        "showOnlineStatus": true
+      },
+      "stats": {
+        "averageScore": 0,
+        "highestScore": 0,
+        "longestStreak": 0,
+        "currentStreak": 0,
+        "totalStudyHours": 0,
+        "lastActiveDate": null
+      },
+      "achievements": [],
+      "gems": 150,
+      "streakFreezes": 1
+    }
+  },
+  "passwords": {},
+  "recoveryPins": {},
+  "pendingVerifications": {},
+  "journals": {},
+  "studySessions": {},
+  "posts": [
+    {
+      "id": "p_seed_1",
+      "authorEmail": "emma@reflect.edu",
+      "authorName": "Emma Watson",
+      "authorAvatar": "https://api.dicebear.com/7.x/bottts/svg?seed=Qorvin&backgroundColor=1e293b,0f172a&backgroundType=gradientLinear",
+      "type": "study_session",
+      "content": "Crushed a massive 120-minute study marathon in Human Anatomy! Feeling ready for the midterms 🧠💪",
+      "audience": "public",
+      "metadata": {
+        "studyMinutes": 120,
+        "studyCategory": "Biology"
+      },
+      "timestamp": "2026-09-03T05:33:55.096Z",
+      "likes": [
+        "lukas@reflect.edu"
+      ],
+      "reactions": {
+        "🙌": [
+          "lukas@reflect.edu",
+          "yuki@reflect.edu"
+        ]
+      },
+      "comments": [
+        {
+          "id": "c_seed_1",
+          "authorEmail": "lukas@reflect.edu",
+          "authorName": "Lukas Weber",
+          "authorAvatar": "https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear",
+          "text": "Incredible study blocks. I need to catch up!",
+          "timestamp": "2026-09-03T06:03:55.096Z"
+        }
+      ]
+    },
+    {
+      "id": "p_seed_2",
+      "authorEmail": "lukas@reflect.edu",
+      "authorName": "Lukas Weber",
+      "type": "journal_score",
+      "authorAvatar": "https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear",
+      "content": "Just finished coding my customized compiler lab and recorded a solid 88 productivity score today. The Gemini feedback was spot on: \"Consistent deep-work blocks.\" 🚀",
+      "audience": "public",
+      "metadata": {
+        "score": 88,
+        "emoji": "🔥"
+      },
+      "timestamp": "2026-09-03T08:03:55.096Z",
+      "likes": [
+        "yuki@reflect.edu",
+        "emma@reflect.edu"
+      ],
+      "reactions": {
+        "🔥": [
+          "emma@reflect.edu"
+        ]
+      },
+      "comments": []
+    },
+    {
+      "id": "p_seed_3",
+      "authorEmail": "yuki@reflect.edu",
+      "authorName": "Yuki Tanaka",
+      "type": "achievement",
+      "authorAvatar": "https://api.dicebear.com/7.x/adventurer/svg?seed=Twiblo&backgroundColor=831843,9d174d&backgroundType=gradientLinear",
+      "content": "Unlocked a new badge: \"Perfect Score\"! Maintained 100% on mindfulness-guided task execution list. Let's keep reflecting!",
+      "audience": "public",
+      "metadata": {
+        "achievementTitle": "Perfect Score"
+      },
+      "timestamp": "2026-09-03T09:03:55.096Z",
+      "likes": [
+        "emma@reflect.edu"
+      ],
+      "reactions": {
+        "🎉": [
+          "emma@reflect.edu",
+          "lukas@reflect.edu"
+        ]
+      },
+      "comments": []
+    }
+  ],
+  "chatRooms": [
+    {
+      "id": "dayscore_ai@reflect.edu_lukas@reflect.edu",
+      "participants": [
+        "dayscore_ai@reflect.edu",
+        "lukas@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_seed_dayscore_ai@reflect.edu_lukas@reflect.edu_1",
+          "senderEmail": "dayscore_ai@reflect.edu",
+          "text": "Hey! How is your study progress today?",
+          "timestamp": "2026-09-03T06:33:55.096Z",
+          "reactions": {},
+          "read": true
+        },
+        {
+          "id": "m_seed_dayscore_ai@reflect.edu_lukas@reflect.edu_2",
+          "senderEmail": "lukas@reflect.edu",
+          "text": "Pretty good! Finished a 2-hour Pomodoro block. Writing my reflection now.",
+          "timestamp": "2026-09-03T07:03:55.096Z",
+          "reactions": {
+            "🔥": [
+              "dayscore_ai@reflect.edu"
+            ]
+          },
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "dayscore_ai@reflect.edu_emma@reflect.edu",
+      "participants": [
+        "dayscore_ai@reflect.edu",
+        "emma@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_seed_dayscore_ai@reflect.edu_emma@reflect.edu_1",
+          "senderEmail": "dayscore_ai@reflect.edu",
+          "text": "Hey! How is your study progress today?",
+          "timestamp": "2026-09-03T06:33:55.096Z",
+          "reactions": {},
+          "read": true
+        },
+        {
+          "id": "m_seed_dayscore_ai@reflect.edu_emma@reflect.edu_2",
+          "senderEmail": "emma@reflect.edu",
+          "text": "Pretty good! Finished a 2-hour Pomodoro block. Writing my reflection now.",
+          "timestamp": "2026-09-03T07:03:55.096Z",
+          "reactions": {
+            "🔥": [
+              "dayscore_ai@reflect.edu"
+            ]
+          },
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "dayscore_ai@reflect.edu_yuki@reflect.edu",
+      "participants": [
+        "dayscore_ai@reflect.edu",
+        "yuki@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_seed_dayscore_ai@reflect.edu_yuki@reflect.edu_1",
+          "senderEmail": "dayscore_ai@reflect.edu",
+          "text": "Hey! How is your study progress today?",
+          "timestamp": "2026-09-03T06:33:55.096Z",
+          "reactions": {},
+          "read": true
+        },
+        {
+          "id": "m_seed_dayscore_ai@reflect.edu_yuki@reflect.edu_2",
+          "senderEmail": "yuki@reflect.edu",
+          "text": "Pretty good! Finished a 2-hour Pomodoro block. Writing my reflection now.",
+          "timestamp": "2026-09-03T07:03:55.096Z",
+          "reactions": {
+            "🔥": [
+              "dayscore_ai@reflect.edu"
+            ]
+          },
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "lukas@reflect.edu_yuki@reflect.edu",
+      "participants": [
+        "lukas@reflect.edu",
+        "yuki@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_seed_lukas@reflect.edu_yuki@reflect.edu_1",
+          "senderEmail": "lukas@reflect.edu",
+          "text": "Hey! How is your study progress today?",
+          "timestamp": "2026-09-03T06:33:55.096Z",
+          "reactions": {},
+          "read": true
+        },
+        {
+          "id": "m_seed_lukas@reflect.edu_yuki@reflect.edu_2",
+          "senderEmail": "yuki@reflect.edu",
+          "text": "Pretty good! Finished a 2-hour Pomodoro block. Writing my reflection now.",
+          "timestamp": "2026-09-03T07:03:55.096Z",
+          "reactions": {
+            "🔥": [
+              "lukas@reflect.edu"
+            ]
+          },
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "emma@reflect.edu_lukas@reflect.edu",
+      "participants": [
+        "emma@reflect.edu",
+        "lukas@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_seed_emma@reflect.edu_lukas@reflect.edu_1",
+          "senderEmail": "emma@reflect.edu",
+          "text": "Hey! How is your study progress today?",
+          "timestamp": "2026-09-03T06:33:55.096Z",
+          "reactions": {},
+          "read": true
+        },
+        {
+          "id": "m_seed_emma@reflect.edu_lukas@reflect.edu_2",
+          "senderEmail": "lukas@reflect.edu",
+          "text": "Pretty good! Finished a 2-hour Pomodoro block. Writing my reflection now.",
+          "timestamp": "2026-09-03T07:03:55.096Z",
+          "reactions": {
+            "🔥": [
+              "emma@reflect.edu"
+            ]
+          },
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "emma@reflect.edu_yuki@reflect.edu",
+      "participants": [
+        "emma@reflect.edu",
+        "yuki@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_seed_emma@reflect.edu_yuki@reflect.edu_1",
+          "senderEmail": "emma@reflect.edu",
+          "text": "Hey! How is your study progress today?",
+          "timestamp": "2026-09-03T06:33:55.096Z",
+          "reactions": {},
+          "read": true
+        },
+        {
+          "id": "m_seed_emma@reflect.edu_yuki@reflect.edu_2",
+          "senderEmail": "yuki@reflect.edu",
+          "text": "Pretty good! Finished a 2-hour Pomodoro block. Writing my reflection now.",
+          "timestamp": "2026-09-03T07:03:55.096Z",
+          "reactions": {
+            "🔥": [
+              "emma@reflect.edu"
+            ]
+          },
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "aarogya13@gmail.com_dayscore_ai@reflect.edu",
+      "participants": [
+        "aarogya13@gmail.com",
+        "dayscore_ai@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_welcome_aarogya13@gmail.com_dayscore_ai@reflect.edu",
+          "senderEmail": "dayscore_ai@reflect.edu",
+          "text": "Hello! I am DayScore AI Coach ✨. I am here to support you both emotionally and logically. Whether you're feeling stressed, working through goals, or need study guidance, talk to me anytime! How are you feeling today?",
+          "timestamp": "2026-09-03T09:34:08.210Z",
+          "reactions": {},
+          "read": true
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": [
+        "aarogya13@gmail.com"
+      ]
+    },
+    {
+      "id": "aarogya13@gmail.com_emma@reflect.edu",
+      "participants": [
+        "aarogya13@gmail.com",
+        "emma@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_welcome_aarogya13@gmail.com_emma@reflect.edu",
+          "senderEmail": "emma@reflect.edu",
+          "text": "Welcome to BaBU! Let's help each other stay accountable. Let me know if you want to study together!",
+          "timestamp": "2026-09-03T09:34:08.210Z",
+          "reactions": {},
+          "read": false
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    },
+    {
+      "id": "aarogya13@gmail.com_lukas@reflect.edu",
+      "participants": [
+        "aarogya13@gmail.com",
+        "lukas@reflect.edu"
+      ],
+      "messages": [
+        {
+          "id": "m_welcome_aarogya13@gmail.com_lukas@reflect.edu",
+          "senderEmail": "lukas@reflect.edu",
+          "text": "What's up! Glad you joined. I am working on my compilers project, let's keep those scores high!",
+          "timestamp": "2026-09-03T09:34:08.210Z",
+          "reactions": {},
+          "read": false
+        }
+      ],
+      "typingEmails": [],
+      "pinnedBy": []
+    }
+  ],
+  "friendRequests": [],
+  "friends": {
+    "dayscore_ai@reflect.edu": [
+      "lukas@reflect.edu",
+      "emma@reflect.edu",
+      "yuki@reflect.edu",
+      "aarogya13@gmail.com"
+    ],
+    "lukas@reflect.edu": [
+      "dayscore_ai@reflect.edu",
+      "emma@reflect.edu",
+      "yuki@reflect.edu",
+      "aarogya13@gmail.com"
+    ],
+    "emma@reflect.edu": [
+      "dayscore_ai@reflect.edu",
+      "lukas@reflect.edu",
+      "yuki@reflect.edu",
+      "aarogya13@gmail.com"
+    ],
+    "yuki@reflect.edu": [
+      "dayscore_ai@reflect.edu",
+      "lukas@reflect.edu",
+      "emma@reflect.edu"
+    ],
+    "aarogya13@gmail.com": [
+      "dayscore_ai@reflect.edu",
+      "emma@reflect.edu",
+      "lukas@reflect.edu"
+    ]
+  }
+}

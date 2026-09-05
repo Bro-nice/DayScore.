@@ -1,7 +1,6 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
@@ -10,9 +9,8 @@ import nodemailer from 'nodemailer';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_FILE = path.join(process.cwd(), 'data.json');
+const DATA_BACKUP_FILE = path.join(process.cwd(), 'data.backup.json');
 
 // --- DATABASE IN-MEMORY STATE & SEED DATA ---
 interface Profile {
@@ -20,6 +18,7 @@ interface Profile {
   username: string;
   displayName: string;
   bio: string;
+  statusNote?: string;
   avatarUrl: string;
   frame?: 'gold' | 'neon' | 'cosmic' | 'emerald' | 'diamond' | 'flame' | 'none';
   theme: 'light' | 'dark' | 'system';
@@ -162,6 +161,7 @@ const SIMULATED_CLASSMATES = [
     displayName: 'DayScore AI Coach ✨',
     bio: 'Empathetic & Logical Daily Reflection Mentor 💜. Here to listen, encourage, and help you structure your goals logically!',
     avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear',
+    statusNote: 'Here to support your daily reflection with fast, logical, and compassionate insights ✨',
     theme: 'dark' as const,
     language: 'English',
     settings: { notifications: true, aiCoachingLevel: 'deep' as const, isProfilePublic: true, showOnlineStatus: true },
@@ -174,6 +174,7 @@ const SIMULATED_CLASSMATES = [
     displayName: 'Lukas Weber',
     bio: 'CS sophomore 💻. Sleep is just a time-out. Building compilers & sipping espresso.',
     avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Qorvin&backgroundColor=1e293b,0f172a&backgroundType=gradientLinear',
+    statusNote: 'Building compiler AST parser in Rust 💻 Coffee count: 3 ☕ Let me know if anyone wants to study!',
     theme: 'dark' as const,
     language: 'English',
     settings: { notifications: true, aiCoachingLevel: 'deep' as const, isProfilePublic: true, showOnlineStatus: true },
@@ -186,6 +187,7 @@ const SIMULATED_CLASSMATES = [
     displayName: 'Emma Watson',
     bio: 'Pre-Med Bio major 🩺. Pomodoro enthusiast & coffee dependent ☕. Always studying.',
     avatarUrl: 'https://api.dicebear.com/7.x/adventurer/svg?seed=Twiblo&backgroundColor=831843,9d174d&backgroundType=gradientLinear',
+    statusNote: 'Pre-Med Bio marathon 🩺 4/6 pomodoro focus blocks done! Reviewing renal physiology.',
     theme: 'light' as const,
     language: 'English',
     settings: { notifications: true, aiCoachingLevel: 'standard' as const, isProfilePublic: true, showOnlineStatus: true },
@@ -198,6 +200,7 @@ const SIMULATED_CLASSMATES = [
     displayName: 'Yuki Tanaka',
     bio: 'Daily mindfulness & organic chem 🧘‍♀️. Consistent reflection is key to growth.',
     avatarUrl: 'https://api.dicebear.com/7.x/adventurer/svg?seed=Rivva&backgroundColor=0284c7,38bdf8&backgroundType=gradientLinear',
+    statusNote: 'Mindfulness & organic chemistry 🧘‍♀️ Consistent daily reflection builds greatness 🌱',
     theme: 'system' as const,
     language: 'Japanese',
     settings: { notifications: false, aiCoachingLevel: 'aggressive' as const, isProfilePublic: true, showOnlineStatus: true },
@@ -302,40 +305,79 @@ function seedDB() {
   ];
 }
 
-// Load database from file
+// Load database from file with multi-tier persistence and backup fallback
 function loadDB() {
+  let loaded = false;
   try {
     if (fs.existsSync(DATA_FILE)) {
       const content = fs.readFileSync(DATA_FILE, 'utf-8');
-      db = JSON.parse(content);
-      // Ensure key structures exist
-      if (!db.users) db.users = {};
-      if (!db.passwords) db.passwords = {};
-      if (!db.recoveryPins) db.recoveryPins = {};
-      if (!db.pendingVerifications) db.pendingVerifications = {};
-      if (!db.journals) db.journals = {};
-      if (!db.studySessions) db.studySessions = {};
-      if (!db.posts) db.posts = [];
-      if (!db.chatRooms) db.chatRooms = [];
-      if (!db.friendRequests) db.friendRequests = [];
-      if (!db.friends) db.friends = {};
-      console.log('Database loaded successfully from file.');
-    } else {
-      console.log('No data.json file found. Seeding database...');
-      seedDB();
-      saveDB();
+      if (content && content.trim()) {
+        db = JSON.parse(content);
+        loaded = true;
+        console.log('Database loaded successfully from primary file.');
+      }
     }
   } catch (error) {
-    console.error('Error loading database, seeding instead:', error);
+    console.error('Error reading primary data.json, checking backup:', error);
+  }
+
+  if (!loaded) {
+    try {
+      if (fs.existsSync(DATA_BACKUP_FILE)) {
+        const backupContent = fs.readFileSync(DATA_BACKUP_FILE, 'utf-8');
+        if (backupContent && backupContent.trim()) {
+          db = JSON.parse(backupContent);
+          loaded = true;
+          console.log('Database recovered successfully from backup file!');
+        }
+      }
+    } catch (bErr) {
+      console.error('Error reading backup file:', bErr);
+    }
+  }
+
+  if (!loaded) {
+    console.log('No existing database found. Seeding initial student profiles...');
     seedDB();
     saveDB();
+  } else {
+    // Ensure all critical root tables exist
+    if (!db.users) db.users = {};
+    if (!db.passwords) db.passwords = {};
+    if (!db.recoveryPins) db.recoveryPins = {};
+    if (!db.pendingVerifications) db.pendingVerifications = {};
+    if (!db.journals) db.journals = {};
+    if (!db.studySessions) db.studySessions = {};
+    if (!db.posts) db.posts = [];
+    if (!db.chatRooms) db.chatRooms = [];
+    if (!db.friendRequests) db.friendRequests = [];
+    if (!db.friends) db.friends = {};
+
+    // Ensure simulated classmates have statusNote
+    SIMULATED_CLASSMATES.forEach(student => {
+      if (db.users[student.email]) {
+        if (!db.users[student.email].statusNote) {
+          db.users[student.email].statusNote = student.statusNote;
+        }
+      } else {
+        db.users[student.email] = student;
+      }
+    });
   }
 }
 
-// Save database to file
+// Save database atomically to primary and backup files
 function saveDB() {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    const serialized = JSON.stringify(db, null, 2);
+    // Write to primary
+    fs.writeFileSync(DATA_FILE, serialized, 'utf-8');
+    // Mirror to backup
+    try {
+      fs.writeFileSync(DATA_BACKUP_FILE, serialized, 'utf-8');
+    } catch (bErr) {
+      console.warn('Backup mirror save warning:', bErr);
+    }
   } catch (error) {
     console.error('Error saving database to file:', error);
   }
@@ -1073,6 +1115,7 @@ async function startServer() {
       });
     }
     if (frame !== undefined) user.frame = frame;
+    if (req.body.statusNote !== undefined) user.statusNote = req.body.statusNote;
     if (theme) user.theme = theme;
     if (language) user.language = language;
     if (settings) user.settings = { ...user.settings, ...settings };
@@ -1080,6 +1123,17 @@ async function startServer() {
     saveDB();
     triggerBackgroundSync(user);
     res.json({ user });
+  });
+
+  // Dedicated Status Note update endpoint
+  app.post('/api/user/status-note', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const { statusNote } = req.body;
+    user.statusNote = typeof statusNote === 'string' ? statusNote.trim().slice(0, 100) : '';
+    saveDB();
+    triggerBackgroundSync(user);
+    res.json({ success: true, statusNote: user.statusNote });
   });
 
   // Delete account & erase all user data permanently
@@ -1552,6 +1606,84 @@ async function startServer() {
     delete user.driveTokens;
     saveDB();
     res.json({ success: true, message: 'Google Drive cloud memory disconnected successfully.' });
+  });
+
+  // Universal All-Time Data Sync (Merges server and device data so data is never lost across days or restarts)
+  app.post('/api/sync/all', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { clientJournals, clientStudySessions } = req.body;
+
+    // 1. Merge all-time journals
+    let userJournals = db.journals[user.email] || [];
+    if (Array.isArray(clientJournals) && clientJournals.length > 0) {
+      const journalMap = new Map<string, JournalEntry>();
+      // Initialize with existing server journals
+      userJournals.forEach(j => {
+        if (j && j.date) journalMap.set(j.date, j);
+      });
+
+      // Merge client journals: prioritize evaluated entries or newer drafts
+      clientJournals.forEach((cj: JournalEntry) => {
+        if (cj && cj.date) {
+          const existing = journalMap.get(cj.date);
+          if (!existing) {
+            journalMap.set(cj.date, cj);
+          } else {
+            // Keep evaluated version if one has score and other doesn't
+            if (cj.score !== null && existing.score === null) {
+              journalMap.set(cj.date, cj);
+            } else if (existing.score !== null && cj.score === null) {
+              // keep existing
+            } else if (cj.savedAt && existing.savedAt && new Date(cj.savedAt) > new Date(existing.savedAt)) {
+              journalMap.set(cj.date, { ...existing, ...cj });
+            } else if (cj.text && (!existing.text || cj.text.length > existing.text.length)) {
+              journalMap.set(cj.date, { ...existing, ...cj });
+            }
+          }
+        }
+      });
+
+      userJournals = Array.from(journalMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+      db.journals[user.email] = userJournals;
+    }
+
+    // 2. Merge all-time study sessions
+    let userSessions = db.studySessions[user.email] || [];
+    if (Array.isArray(clientStudySessions) && clientStudySessions.length > 0) {
+      const sessionMap = new Map<string, StudySession>();
+      userSessions.forEach(s => { if (s && (s.id || s.timestamp)) sessionMap.set(s.id || s.timestamp, s); });
+      clientStudySessions.forEach((cs: StudySession) => {
+        if (cs && (cs.id || cs.timestamp)) {
+          sessionMap.set(cs.id || cs.timestamp, cs);
+        }
+      });
+      userSessions = Array.from(sessionMap.values()).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+      db.studySessions[user.email] = userSessions;
+    }
+
+    // 3. Recalculate stats based on complete all-time history
+    const evaluatedJournals = userJournals.filter(j => j.score !== null);
+    if (evaluatedJournals.length > 0) {
+      const sum = evaluatedJournals.reduce((acc, curr) => acc + (curr.score || 0), 0);
+      user.stats.averageScore = Math.round(sum / evaluatedJournals.length);
+      const maxScore = Math.max(...evaluatedJournals.map(j => j.score || 0));
+      if (maxScore > user.stats.highestScore) user.stats.highestScore = maxScore;
+    }
+
+    if (userSessions.length > 0) {
+      const totalMins = userSessions.reduce((acc, s) => acc + (s.durationMinutes || 0), 0);
+      user.stats.totalStudyHours = Number((totalMins / 60).toFixed(1));
+    }
+
+    saveDB();
+    res.json({
+      success: true,
+      journals: userJournals,
+      studySessions: userSessions,
+      user
+    });
   });
 
   // 3. Journals List & Autosave Drafts
@@ -2487,10 +2619,12 @@ Reply naturally as a supportive student friend in 1-2 short, friendly, upbeat se
   });
 
   // --- SERVE CLIENT SPA FRONTEND ---
-  if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.join(__dirname, 'dist')));
+  const distPath = path.join(process.cwd(), 'dist');
+  if (process.env.NODE_ENV === 'production' || fs.existsSync(path.join(distPath, 'index.html'))) {
+    console.log(`Serving production static bundle from ${distPath}`);
+    app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
     // Development Mode using Vite Dev Server Middleware

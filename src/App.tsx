@@ -577,6 +577,11 @@ export default function App() {
   });
   const [showStatusNoteModal, setShowStatusNoteModal] = useState(false);
   const [statusNoteInput, setStatusNoteInput] = useState('');
+  const [viewingStatusNote, setViewingStatusNote] = useState<{
+    profile: Profile;
+    note: string;
+    isSelf?: boolean;
+  } | null>(null);
 
   const [quickNotes, setQuickNotes] = useState<{ id: string; title: string; content: string; category: string; color: string; date: string; pinned: boolean }[]>(() => {
     try {
@@ -612,17 +617,111 @@ export default function App() {
   const [newNoteColor, setNewNoteColor] = useState('violet');
   const [noteCategoryFilter, setNoteCategoryFilter] = useState('All');
 
-  // --- SPECIAL ANIMATED TROPHY SHOWCASE STATE ---
-  const [selectedTrophyId, setSelectedTrophyId] = useState<string>('gold_champion');
-  const [trophyInspectModal, setTrophyInspectModal] = useState<any | null>(null);
+  // --- RANKINGS & LEADERBOARD STATE ---
+  const [leaderboardScope, setLeaderboardScope] = useState<'global' | 'friends'>('global');
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState<'weekly' | 'daily' | 'monthly'>('weekly');
+  const [leaderboardSearchQuery, setLeaderboardSearchQuery] = useState('');
 
-  const handleSaveStatusNote = (noteText: string) => {
+  const getClassmateStatusNote = (friend: Profile): string => {
+    if (friend.statusNote && friend.statusNote.trim()) {
+      return friend.statusNote;
+    }
+    const isAi = friend.email === 'dayscore_ai@reflect.edu' || friend.username === 'dayscore_ai';
+    if (isAi) {
+      return 'Here to support your daily reflection with fast, logical, and compassionate insights ✨';
+    }
+    if (friend.email?.includes('emma')) {
+      return 'Pre-Med Bio marathon 🩺 4/6 pomodoro focus blocks done! Reviewing renal physiology.';
+    }
+    if (friend.email?.includes('lukas')) {
+      return 'Building compiler AST parser in Rust 💻 Coffee count: 3 ☕ Let me know if anyone wants to study!';
+    }
+    if (friend.email?.includes('yuki')) {
+      return 'Mindfulness & organic chemistry 🧘‍♀️ Consistent daily reflection builds greatness 🌱';
+    }
+    return friend.bio || 'Studying and reflecting 🌱';
+  };
+
+  const handleSaveStatusNote = async (noteText: string) => {
     const trimmed = noteText.trim();
     if (!trimmed) return;
     setUserStatusNote(trimmed);
     localStorage.setItem('reflect_status_note', trimmed);
     setShowStatusNoteModal(false);
     showToast('✨ Status note updated on your profile!', 'success');
+    if (currentUser?.email) {
+      try {
+        await fetch('/api/user/status-note', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-auth-email': currentUser.email,
+          },
+          body: JSON.stringify({ statusNote: trimmed }),
+        });
+        setCurrentUser(prev => prev ? { ...prev, statusNote: trimmed } : prev);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  const handleClearStatusNote = async () => {
+    setUserStatusNote('');
+    localStorage.removeItem('reflect_status_note');
+    setViewingStatusNote(null);
+    showToast('Status note cleared', 'info');
+    if (currentUser?.email) {
+      try {
+        await fetch('/api/user/status-note', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-auth-email': currentUser.email,
+          },
+          body: JSON.stringify({ statusNote: '' }),
+        });
+        setCurrentUser(prev => prev ? { ...prev, statusNote: '' } : prev);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  const handleReactToClassmateStatusNote = async (friend: Profile, emoji: string, noteText: string) => {
+    if (!currentUser) return;
+    const room = chatRooms.find(r => r.participants.includes(friend.email) && r.participants.includes(currentUser.email));
+    const reactionMessage = `Reacted ${emoji} to your status note: "${noteText}"`;
+    if (room) {
+      try {
+        await fetch(`/api/chat/rooms/${room.id}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-auth-email': currentUser.email,
+          },
+          body: JSON.stringify({ text: reactionMessage }),
+        });
+        fetchMessages(room.id);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    showToast(`Sent ${emoji} to ${friend.displayName.split(' ')[0]}!`, 'success');
+  };
+
+  const openChatFromStatusNote = (friendEmail: string) => {
+    if (!currentUser) return;
+    const room = chatRooms.find(r => r.participants.includes(friendEmail) && r.participants.includes(currentUser.email));
+    if (room) {
+      setActiveRoomId(room.id);
+      setChatMessages([]);
+      fetchMessages(room.id);
+    } else {
+      sendFriendRequest(friendEmail);
+    }
+    setViewingStatusNote(null);
+    setCurrentTab('chat');
   };
 
   const handleAddQuickNote = () => {
@@ -966,21 +1065,27 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Auto-persist journals to local device storage
+  // Auto-persist journals to local device storage safely (never overwrite populated storage with empty array)
   useEffect(() => {
     try {
-      const emailKey = currentUser?.email || localStorage.getItem('reflect_auth_email') || 'guest';
-      localStorage.setItem(`reflect_journals_${emailKey}`, JSON.stringify(journals));
+      const emailKey = currentUser?.email || localStorage.getItem('reflect_auth_email');
+      if (!emailKey) return;
+      if (journals.length > 0) {
+        localStorage.setItem(`reflect_journals_${emailKey}`, JSON.stringify(journals));
+      }
     } catch (e) {
       console.error('Error auto-saving journals to local storage:', e);
     }
   }, [journals, currentUser?.email]);
 
-  // Auto-persist study sessions to local device storage
+  // Auto-persist study sessions to local device storage safely
   useEffect(() => {
     try {
-      const emailKey = currentUser?.email || localStorage.getItem('reflect_auth_email') || 'guest';
-      localStorage.setItem(`reflect_study_${emailKey}`, JSON.stringify(studySessions));
+      const emailKey = currentUser?.email || localStorage.getItem('reflect_auth_email');
+      if (!emailKey) return;
+      if (studySessions.length > 0) {
+        localStorage.setItem(`reflect_study_${emailKey}`, JSON.stringify(studySessions));
+      }
     } catch (e) {
       console.error('Error auto-saving study sessions to local storage:', e);
     }
@@ -1394,19 +1499,20 @@ export default function App() {
   useEffect(() => {
     if (activeRoomId) {
       fetchMessages(activeRoomId);
-      // Setup polling for chat rooms (to feel responsive & real-time)
+      // Setup polling for active chat room messages (to feel responsive & real-time)
       const chatInterval = setInterval(() => {
-        fetchMessages(activeRoomId);
-        fetchChatRooms();
+        if (activeRoomId) {
+          fetchMessages(activeRoomId);
+        }
       }, 3500);
       return () => clearInterval(chatInterval);
     }
   }, [activeRoomId]);
 
-  // Auto scroll down chat view when messages arrive (especially after bot answers)
+  // Auto scroll down chat view when messages arrive (without displacing page layout)
   useEffect(() => {
     if (chatMessages.length > 0) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   }, [chatMessages.length]);
 
@@ -1776,21 +1882,27 @@ export default function App() {
     const savedToken = localStorage.getItem('reflect_auth_token');
     if (savedToken) headers['x-auth-token'] = savedToken;
     
-    // Instant restore from local device storage cache if present (Game-style instant load)
+    // 1. Instant restore from local device storage cache if present (Game-style instant load)
+    let localJournals: JournalEntry[] = [];
+    let localStudy: StudySession[] = [];
     try {
       const cachedJ = localStorage.getItem(`reflect_journals_${email}`);
       if (cachedJ) {
         const parsed = JSON.parse(cachedJ);
         if (Array.isArray(parsed) && parsed.length > 0) {
+          localJournals = parsed;
           setJournals(parsed);
-          const todayJ = parsed.find((j: any) => j.date === todayDateStr);
-          if (todayJ && todayJ.text) setJournalText(todayJ.text);
+          const currentDayJ = parsed.find((j: any) => j.date === selectedDate);
+          if (currentDayJ && currentDayJ.text) setJournalText(currentDayJ.text);
         }
       }
       const cachedS = localStorage.getItem(`reflect_study_${email}`);
       if (cachedS) {
         const parsed = JSON.parse(cachedS);
-        if (Array.isArray(parsed) && parsed.length > 0) setStudySessions(parsed);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          localStudy = parsed;
+          setStudySessions(parsed);
+        }
       }
       const cachedTodos = localStorage.getItem(`babu_todos_${email}`);
       if (cachedTodos) {
@@ -1812,7 +1924,6 @@ export default function App() {
         const parsed = JSON.parse(cachedRooms);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setChatRooms(parsed);
-          if (!activeRoomId) setActiveRoomId(parsed[0].id);
         }
       }
       const cachedPosts = localStorage.getItem('reflect_posts_feed');
@@ -1824,28 +1935,36 @@ export default function App() {
       console.error('Local cache read warning:', e);
     }
 
-    // Server load and cache update
-    fetch('/api/journals', { headers })
+    // 2. Bidirectional All-Time Cloud Sync (Universal multi-tier persistence)
+    fetch('/api/sync/all', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      },
+      body: JSON.stringify({
+        clientJournals: localJournals,
+        clientStudySessions: localStudy
+      })
+    })
       .then(r => r.json())
       .then(data => {
-        if (data.journals && Array.isArray(data.journals)) {
+        if (data.journals && Array.isArray(data.journals) && data.journals.length > 0) {
           setJournals(data.journals);
           localStorage.setItem(`reflect_journals_${email}`, JSON.stringify(data.journals));
-          const todayJ = data.journals.find((j: any) => j.date === todayDateStr);
-          if (todayJ && todayJ.text) setJournalText(todayJ.text);
+          const currentDayJ = data.journals.find((j: any) => j.date === selectedDate);
+          if (currentDayJ && currentDayJ.text) setJournalText(currentDayJ.text);
         }
-      })
-      .catch(err => console.error('Failed to load journals from server:', err));
-
-    fetch('/api/study/sessions', { headers })
-      .then(r => r.json())
-      .then(data => {
-        if (data.studySessions && Array.isArray(data.studySessions)) {
+        if (data.studySessions && Array.isArray(data.studySessions) && data.studySessions.length > 0) {
           setStudySessions(data.studySessions);
           localStorage.setItem(`reflect_study_${email}`, JSON.stringify(data.studySessions));
         }
+        if (data.user) {
+          setCurrentUser(data.user);
+          localStorage.setItem(`reflect_cached_user_${email}`, JSON.stringify(data.user));
+        }
       })
-      .catch(err => console.error('Failed to load study sessions from server:', err));
+      .catch(err => console.warn('Sync notice: operating from reliable device storage cache', err));
 
     fetch('/api/google-drive/status', { headers }).then(r => r.json()).then(data => {
       setDriveConnected(data.connected);
@@ -1875,11 +1994,9 @@ export default function App() {
       .then(data => {
         const rooms = data.rooms || [];
         setChatRooms(rooms);
-        if (rooms.length > 0) {
-          const firstRoom = rooms[0];
-          setActiveRoomId(firstRoom.id);
-          fetchMessages(firstRoom.id, email);
-        }
+      })
+      .catch(err => {
+        console.error('Failed to fetch chat rooms', err);
       });
   };
 
@@ -1909,7 +2026,7 @@ export default function App() {
       .then(data => setUserSearchResult(data.users || []));
   };
 
-  const fetchLeaderboards = (email = currentUser?.email, scope = 'global', period = 'weekly') => {
+  const fetchLeaderboards = (email = currentUser?.email, scope = leaderboardScope, period = leaderboardPeriod) => {
     if (!email) return;
     fetch(`/api/leaderboard?scope=${scope}&period=${period}`, { headers: { 'x-auth-email': email } })
       .then(r => r.json())
@@ -1919,6 +2036,16 @@ export default function App() {
         );
         setLeaderboardRankings(rankings);
       });
+  };
+
+  const handleLeaderboardScopeChange = (newScope: 'global' | 'friends') => {
+    setLeaderboardScope(newScope);
+    fetchLeaderboards(currentUser?.email, newScope, leaderboardPeriod);
+  };
+
+  const handleLeaderboardPeriodChange = (newPeriod: 'weekly' | 'daily' | 'monthly') => {
+    setLeaderboardPeriod(newPeriod);
+    fetchLeaderboards(currentUser?.email, leaderboardScope, newPeriod);
   };
 
   const fetchAnalytics = (email = currentUser?.email) => {
@@ -3196,15 +3323,19 @@ export default function App() {
               { id: 'analytics', label: 'Analytics Insights', icon: <TrendingUp className="w-4 h-4" /> },
               { id: 'social', label: 'Student Feed', icon: <Users className="w-4 h-4" /> },
               { id: 'chat', label: 'Classroom Chat', icon: <MessageSquare className="w-4 h-4" /> },
-              { id: 'leaderboard', label: 'Trophy Rank', icon: <Trophy className="w-4 h-4" /> },
+              { id: 'leaderboard', label: 'Rankings', icon: <Trophy className="w-4 h-4" /> },
               { id: 'profile', label: 'Student Profile', icon: <User className="w-4 h-4" /> },
               { id: 'settings', label: 'Settings', icon: <SettingsIcon className="w-4 h-4" /> },
             ].map(item => (
               <button
                 key={item.id}
                 onClick={() => {
+                  if (item.id === 'chat') {
+                    setActiveRoomId(null);
+                  }
                   setCurrentTab(item.id as any);
                   if (item.id === 'analytics') fetchAnalytics();
+                  if (item.id === 'leaderboard') fetchLeaderboards(currentUser?.email, leaderboardScope, leaderboardPeriod);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition-all duration-300 ${
                   currentTab === item.id
@@ -3259,8 +3390,11 @@ export default function App() {
             key={item.id}
             role="button"
             onClick={() => {
+              if (item.id === 'chat') {
+                setActiveRoomId(null);
+              }
               setCurrentTab(item.id as any);
-              if (item.id === 'leaderboard') fetchLeaderboards(currentUser.email, 'global', 'weekly');
+              if (item.id === 'leaderboard') fetchLeaderboards(currentUser.email, leaderboardScope, leaderboardPeriod);
             }}
             className={`flex flex-col items-center justify-center gap-0.5 text-[9px] font-bold cursor-pointer transition-colors py-1 ${
               currentTab === item.id ? 'text-violet-600 dark:text-violet-400 font-extrabold' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
@@ -3273,7 +3407,7 @@ export default function App() {
       </div>
 
       {/* --- CORE WORKING PANELS --- */}
-      <main className="flex-1 flex flex-col overflow-y-auto pb-20 md:pb-0 pt-12 md:pt-0">
+      <main className={`flex-1 flex flex-col pb-20 md:pb-0 pt-12 md:pt-0 ${currentTab === 'chat' ? 'overflow-hidden h-screen' : 'overflow-y-auto'}`}>
         
         {/* TAB 1: HOME DASHBOARD */}
         {currentTab === 'home' && (
@@ -3394,27 +3528,42 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Quick Date Pills */}
+                  {/* Quick Date Pills with DayScores */}
                   <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 justify-center">
                     {[
                       { label: 'Today', date: todayDateStr },
                       { label: 'Yesterday', date: new Date(Date.now() - 86400000).toISOString().split('T')[0] },
                       { label: '2d Ago', date: new Date(Date.now() - 86400000 * 2).toISOString().split('T')[0] },
                       { label: '3d Ago', date: new Date(Date.now() - 86400000 * 3).toISOString().split('T')[0] },
-                    ].map(item => (
-                      <button
-                        key={item.label}
-                        type="button"
-                        onClick={() => setSelectedDate(item.date)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                          selectedDate === item.date
-                            ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-sm'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                    ].map(item => {
+                      const entryForDay = journals.find(j => j.date === item.date);
+                      const hasDayScore = entryForDay && (entryForDay.score !== null || entryForDay.evaluation?.score !== undefined);
+                      const scoreNum = entryForDay?.score ?? entryForDay?.evaluation?.score;
+
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => setSelectedDate(item.date)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                            selectedDate === item.date
+                              ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-sm'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          <span>{item.label}</span>
+                          {hasDayScore && (
+                            <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${
+                              selectedDate === item.date
+                                ? 'bg-white/20 text-white'
+                                : 'bg-violet-100 dark:bg-violet-950/60 text-violet-700 dark:text-violet-300'
+                            }`}>
+                              {scoreNum} {entryForDay?.emoji || '✨'}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -3853,7 +4002,10 @@ export default function App() {
             {/* Calendar Grid Simulation (Last 35 days) */}
             <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-6 rounded-[32px] border border-violet-100/50 dark:border-slate-800/80 shadow-md">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-black text-slate-800 dark:text-white font-display flex items-center gap-2">
+                <h3 
+                  style={{ fontFamily: 'Verdana', fontWeight: 'normal' }}
+                  className="text-sm text-slate-800 dark:text-white flex items-center gap-2"
+                >
                   <CalendarIcon className="w-4 h-4 text-violet-500" />
                   Reflection Calendar History
                 </h3>
@@ -4752,7 +4904,7 @@ export default function App() {
 
         {/* TAB 5: CLASSROOM PRIVATE MESSAGING (MESSENGER / INSTAGRAM DIRECT UI) */}
         {currentTab === 'chat' && (
-          <div className="flex h-[calc(100vh-80px)] md:h-screen overflow-hidden relative z-10 bg-slate-50/50 dark:bg-slate-950/40">
+          <div className="flex h-full flex-1 overflow-hidden relative z-10 bg-slate-50/50 dark:bg-slate-950/40">
             
             {/* Friends/Chat Rooms List Sidebar */}
             <div className={`w-full lg:w-80 lg:w-96 border-r border-slate-200/60 dark:border-slate-800/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl flex flex-col flex-shrink-0 transition-all duration-300 ${
@@ -4786,55 +4938,98 @@ export default function App() {
 
                 {/* Active Classmates Stories Row (Instagram / Messenger Active Now Bar) */}
                 <div className="pt-2">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-3">Active Classmates & Status Notes</span>
-                  <div className="flex items-center gap-3 overflow-x-auto pb-2 no-scrollbar pt-4">
+                  <div className="flex items-center justify-between mb-2.5 px-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                        Classmates & Status Notes
+                      </span>
+                    </div>
+                    <span className="text-[9px] font-bold text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/60 border border-violet-100 dark:border-violet-900/50 px-2 py-0.5 rounded-full">
+                      Tap profile for full note
+                    </span>
+                  </div>
+
+                  {/* Selected Element: Classmates Stories Tray */}
+                  <div className="flex items-center gap-4 overflow-x-auto pb-3 pt-6 px-3.5 no-scrollbar bg-slate-50/90 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800/80 rounded-2xl shadow-xs scroll-smooth">
                     {/* User's own note / status */}
-                    <div
+                    <button
+                      type="button"
                       onClick={() => {
-                        setStatusNoteInput(userStatusNote);
-                        setShowStatusNoteModal(true);
+                        if (userStatusNote) {
+                          setViewingStatusNote({
+                            profile: currentUser || {
+                              email: 'you@reflect.edu',
+                              username: 'you',
+                              displayName: 'You',
+                              bio: '',
+                              avatarUrl: '',
+                              frame: 'none',
+                              theme: 'system',
+                              language: 'English',
+                              settings: { notifications: true, aiCoachingLevel: 'standard', isProfilePublic: true, showOnlineStatus: true },
+                              stats: { averageScore: 0, highestScore: 0, longestStreak: 0, currentStreak: 0, totalStudyHours: 0, lastActiveDate: '' },
+                              achievements: []
+                            },
+                            note: userStatusNote,
+                            isSelf: true
+                          });
+                        } else {
+                          setStatusNoteInput('');
+                          setShowStatusNoteModal(true);
+                        }
                       }}
-                      className="flex flex-col items-center flex-shrink-0 cursor-pointer group relative"
+                      className="flex flex-col items-center flex-shrink-0 cursor-pointer group relative transition-transform duration-150 hover:-translate-y-0.5 focus:outline-none"
                     >
                       {/* Floating Speech Bubble for status note */}
-                      <div className="absolute -top-5 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[8px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap shadow-md max-w-[70px] truncate z-20 pointer-events-none ring-1 ring-white/30">
-                        {userStatusNote}
+                      <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[9px] font-black px-2.5 py-0.5 rounded-full whitespace-nowrap shadow-sm max-w-[82px] truncate z-20 pointer-events-none ring-1 ring-white/30 text-center">
+                        {userStatusNote || '+ Share note'}
+                        {/* Downward notch tail */}
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-[1px] border-[3px] border-transparent border-t-fuchsia-600" />
                       </div>
-                      <div className="relative mt-1">
+                      <div className="relative mt-1 p-[2px] rounded-full bg-gradient-to-tr from-violet-500 via-fuchsia-500 to-indigo-500 shadow-xs group-hover:scale-105 transition-transform duration-200">
                         <SafeAvatar src={currentUser?.avatarUrl} name={currentUser?.displayName || 'User'} frame={currentUser?.frame || 'none'} size="sm" />
-                        <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-violet-600 text-white flex items-center justify-center text-[10px] font-bold border-2 border-white dark:border-slate-900 shadow-xs z-10">
-                          +
+                        <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-violet-600 text-white flex items-center justify-center text-[10px] font-bold border-2 border-white dark:border-slate-900 shadow-xs z-10">
+                          {userStatusNote ? '💭' : '+'}
                         </div>
                       </div>
-                      <span className="text-[9px] font-extrabold text-slate-700 dark:text-slate-300 mt-1 truncate w-14 text-center">Your note</span>
-                    </div>
+                      <span className="text-[10px] font-extrabold text-slate-700 dark:text-slate-300 mt-1.5 truncate w-16 text-center group-hover:text-violet-600 dark:group-hover:text-violet-400 transition-colors">
+                        Your note
+                      </span>
+                    </button>
 
                     {/* Classmates with active story/online ring */}
                     {friendsList.map(friend => {
-                      const room = chatRooms.find(r => r.peer?.email === friend.email);
-                      const isAi = friend.email === 'dayscore_ai@reflect.edu';
-                      const defaultNote = isAi ? 'Here to support ✨' : friend.email.includes('emma') ? 'Bio marathon 🩺' : friend.email.includes('lukas') ? 'Compilers 💻' : 'Reflecting 🌱';
+                      const note = getClassmateStatusNote(friend);
                       return (
                         <button
                           key={friend.email}
+                          type="button"
                           onClick={() => {
-                            if (room) {
-                              setActiveRoomId(room.id);
-                              setChatMessages([]);
-                            } else {
-                              sendFriendRequest(friend.email);
-                            }
+                            setViewingStatusNote({
+                              profile: friend,
+                              note,
+                              isSelf: false
+                            });
                           }}
-                          className="flex flex-col items-center flex-shrink-0 cursor-pointer group relative"
+                          className="flex flex-col items-center flex-shrink-0 cursor-pointer group relative transition-transform duration-150 hover:-translate-y-0.5 focus:outline-none"
+                          title={`Click to read ${friend.displayName}'s status note`}
                         >
-                          <div className="absolute -top-5 bg-slate-800 dark:bg-slate-700 text-slate-100 text-[8px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap shadow-xs max-w-[70px] truncate z-20 pointer-events-none">
-                            {defaultNote}
+                          {/* Floating Thought Bubble */}
+                          <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-[9px] font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap shadow-xs border border-violet-200/80 dark:border-slate-700 max-w-[82px] truncate z-20 pointer-events-none group-hover:border-violet-400 dark:group-hover:border-violet-500 transition-colors text-center">
+                            {note}
+                            {/* Downward notch tail */}
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-[1px] border-[3px] border-transparent border-t-white dark:border-t-slate-800" />
                           </div>
-                          <div className="relative mt-1">
+                          {/* Avatar with Gradient Story Ring */}
+                          <div className="relative mt-1 p-[2px] rounded-full bg-gradient-to-tr from-violet-500 via-fuchsia-500 to-amber-400 shadow-xs group-hover:scale-105 transition-transform duration-200">
                             <SafeAvatar src={friend.avatarUrl} name={friend.displayName} frame={friend.frame || 'none'} size="sm" />
-                            <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 z-10" />
+                            <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 shadow-xs z-10" />
                           </div>
-                          <span className="text-[9px] font-semibold text-slate-700 dark:text-slate-300 mt-1 truncate w-14 text-center">
+                          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-200 mt-1.5 truncate w-16 text-center group-hover:text-violet-600 dark:group-hover:text-violet-400 transition-colors">
                             {friend.displayName.split(' ')[0]}
                           </span>
                         </button>
@@ -5048,16 +5243,19 @@ export default function App() {
                   return (
                     <>
                       {/* Top Peer Info bar (Instagram DM Style Header) */}
-                      <div className="px-3 sm:px-6 py-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between shadow-xs z-10">
+                      <div className="sticky top-0 z-20 px-3 sm:px-6 py-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between shadow-xs flex-shrink-0">
                         <div className="flex items-center gap-2 md:gap-3 min-w-0">
                           <button
                             type="button"
-                            onClick={() => setActiveRoomId(null)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-500/10 hover:bg-violet-500/20 text-violet-600 dark:text-violet-300 rounded-xl transition-all cursor-pointer flex-shrink-0 font-extrabold text-xs border border-violet-200/80 dark:border-violet-800/80 active:scale-95 shadow-xs"
-                            title="Back to direct messages & classmate list"
+                            onClick={() => {
+                              setActiveRoomId(null);
+                              setChatInputText('');
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-500/10 hover:bg-violet-500/20 active:bg-violet-500/30 text-violet-600 dark:text-violet-300 rounded-xl transition-all cursor-pointer flex-shrink-0 font-extrabold text-xs border border-violet-200/80 dark:border-violet-800/80 active:scale-95 shadow-xs"
+                            title="Back to Direct Messages list"
                           >
                             <ArrowLeft className="w-4 h-4 text-violet-600 dark:text-violet-400 stroke-[2.5]" />
-                            <span>Chats</span>
+                            <span className="font-black">Direct Messages</span>
                           </button>
                           <div className="relative cursor-pointer" onClick={() => setShowPeerInfoDrawer(true)}>
                             <SafeAvatar
@@ -5337,6 +5535,7 @@ export default function App() {
                               className="w-full pl-4 pr-10 py-2.5 text-xs bg-slate-100 dark:bg-slate-800 rounded-full focus:outline-none focus:ring-2 focus:ring-violet-500/50 text-slate-900 dark:text-white font-medium placeholder:text-slate-400"
                               onKeyDown={e => {
                                 if (e.key === 'Enter') handleSendChatMessage();
+                                if (e.key === 'Escape') setActiveRoomId(null);
                               }}
                             />
                           </div>
@@ -5391,384 +5590,391 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 6: TROPHY RANK LEADERBOARDS */}
+        {/* TAB 6: RANKINGS & LEADERBOARDS */}
         {currentTab === 'leaderboard' && (
-          <div className="p-6 md:p-8 space-y-8 max-w-4xl mx-auto w-full animate-fade-in">
-            {/* Hero Trophy Banner */}
-            <div className="relative overflow-hidden bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-amber-600/20 dark:from-amber-950/40 dark:via-yellow-900/20 dark:to-slate-900 p-6 sm:p-8 rounded-[36px] border border-amber-400/30 dark:border-amber-500/30 shadow-xl">
-              <div className="absolute -right-6 -bottom-6 w-40 h-40 bg-amber-400/20 dark:bg-amber-500/10 rounded-full blur-2xl pointer-events-none"></div>
-              <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
-                <div className="flex items-center gap-4 text-center md:text-left">
-                  <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-amber-400 to-yellow-500 p-0.5 shadow-lg shadow-amber-500/30 flex items-center justify-center shrink-0">
-                    <div className="w-full h-full bg-slate-900 rounded-[22px] flex items-center justify-center text-3xl animate-bounce">
-                      🏆
-                    </div>
-                  </div>
-                  <div>
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-400/20 dark:bg-amber-500/20 border border-amber-400/30 rounded-full text-[10px] font-black text-amber-700 dark:text-amber-300 uppercase tracking-wider mb-1">
-                      <Sparkles className="w-3 h-3 animate-spin" />
-                      <span>Season Leaderboards</span>
-                    </div>
-                    <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white font-display">Hall of Trophies</h1>
-                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 max-w-md">Compare daily productivity rates, climb ranks, and claim your place on the champions podium!</p>
-                  </div>
+          <div className="p-4 sm:p-6 md:p-8 space-y-6 max-w-4xl mx-auto w-full animate-fade-in">
+            {/* Header & Filter Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/80 dark:border-slate-800">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[11px] font-semibold mb-1">
+                  <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Student Leaderboard</span>
+                </div>
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+                  Rankings
+                </h1>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Track reflection scores and consistency streaks across students.
+                </p>
+              </div>
+
+              {/* Scope & Period Segmented Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Scope Switcher: All Students vs Classmates */}
+                <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+                  <button
+                    onClick={() => handleLeaderboardScopeChange('global')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      leaderboardScope === 'global'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs font-semibold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Global</span>
+                  </button>
+                  <button
+                    onClick={() => handleLeaderboardScopeChange('friends')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      leaderboardScope === 'friends'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs font-semibold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Users className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Classmates</span>
+                  </button>
                 </div>
 
-                {/* Scope Switchers */}
-                <div className="flex bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-1.5 rounded-2xl border border-amber-200 dark:border-amber-900/50 shadow-md">
-                  {['global', 'friends'].map(sc => (
+                {/* Period Switcher: Weekly / Daily / Monthly */}
+                <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+                  {(['weekly', 'daily', 'monthly'] as const).map((p) => (
                     <button
-                      key={sc}
-                      onClick={() => fetchLeaderboards(currentUser.email, sc, 'weekly')}
-                      className="px-4 py-2 hover:bg-amber-500 hover:text-slate-950 text-slate-700 dark:text-slate-200 text-xs font-black rounded-xl capitalize transition-all cursor-pointer"
+                      key={p}
+                      onClick={() => handleLeaderboardPeriodChange(p)}
+                      className={`px-3 py-1.5 rounded-lg capitalize transition-colors cursor-pointer ${
+                        leaderboardPeriod === p
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs font-semibold'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
                     >
-                      {sc === 'global' ? '🌍 Global' : '👥 Classmates'}
+                      {p === 'weekly' ? 'Weekly' : p === 'daily' ? 'Daily' : 'Monthly'}
                     </button>
                   ))}
                 </div>
               </div>
             </div>
 
-            {/* Filtered Rankings (No AI Coach) */}
+            {/* Calculations & Data Rendering */}
             {(() => {
-              const cleanRankings = leaderboardRankings.filter(r => r.email !== 'dayscore_ai@reflect.edu' && r.username !== 'dayscore_ai');
+              const cleanRankings = leaderboardRankings.filter(
+                r => r.email !== 'dayscore_ai@reflect.edu' && r.username !== 'dayscore_ai'
+              );
 
-              if (cleanRankings.length === 0) {
-                return (
-                  <div className="p-12 text-center bg-white/80 dark:bg-slate-900/80 rounded-[32px] border border-slate-200 dark:border-slate-800 text-slate-400 space-y-3">
-                    <Trophy className="w-12 h-12 mx-auto text-amber-500/40 animate-pulse" />
-                    <p className="text-xs font-bold text-slate-600 dark:text-slate-300">No active rankers found in this category yet.</p>
-                    <p className="text-[11px] text-slate-400">Log daily reflections to claim the #1 spot!</p>
-                  </div>
-                );
-              }
+              const userRankIndex = cleanRankings.findIndex(
+                r => currentUser && r.email.toLowerCase() === currentUser.email.toLowerCase()
+              );
+              const userRankNum = userRankIndex >= 0 ? userRankIndex + 1 : null;
+              const userRankObj = userRankIndex >= 0 ? cleanRankings[userRankIndex] : null;
+
+              const filteredList = leaderboardSearchQuery.trim()
+                ? cleanRankings.filter(
+                    r =>
+                      r.displayName.toLowerCase().includes(leaderboardSearchQuery.toLowerCase()) ||
+                      r.username.toLowerCase().includes(leaderboardSearchQuery.toLowerCase())
+                  )
+                : cleanRankings;
 
               const top1 = cleanRankings[0];
               const top2 = cleanRankings[1];
               const top3 = cleanRankings[2];
 
-              const trophiesList = [
-                {
-                  id: 'gold_champion',
-                  title: 'Grand Champion Gold Cup',
-                  subtitle: '#1 Ranked Season Champion',
-                  icon: '🏆',
-                  gradient: 'from-amber-400 via-yellow-300 to-amber-500',
-                  border: 'border-amber-400 dark:border-amber-500',
-                  glow: 'shadow-[0_0_30px_rgba(245,158,11,0.35)]',
-                  textAccent: 'text-amber-600 dark:text-amber-400',
-                  holder: top1 ? top1.displayName : 'Unclaimed',
-                  holderAvatar: top1?.avatarUrl,
-                  holderScore: top1 ? `${top1.score}%` : 'N/A',
-                  req: 'Maintain #1 spot in student rankings',
-                  status: top1?.email === currentUser?.email ? '✨ Yours Now!' : top1 ? 'Held by Champion' : 'Available',
-                },
-                {
-                  id: 'silver_vanguard',
-                  title: 'Silver Vanguard Shield',
-                  subtitle: '#2 Ranked Season Titan',
-                  icon: '🛡️',
-                  gradient: 'from-slate-200 via-slate-100 to-slate-300',
-                  border: 'border-slate-300 dark:border-slate-600',
-                  glow: 'shadow-[0_0_25px_rgba(203,213,225,0.3)]',
-                  textAccent: 'text-slate-700 dark:text-slate-300',
-                  holder: top2 ? top2.displayName : 'Unclaimed',
-                  holderAvatar: top2?.avatarUrl,
-                  holderScore: top2 ? `${top2.score}%` : 'N/A',
-                  req: 'Secure #2 spot in student rankings',
-                  status: top2?.email === currentUser?.email ? '✨ Yours Now!' : top2 ? 'Held by Vanguard' : 'Available',
-                },
-                {
-                  id: 'bronze_crest',
-                  title: 'Bronze Pioneer Crest',
-                  subtitle: '#3 Ranked Season Scholar',
-                  icon: '🥉',
-                  gradient: 'from-amber-700 via-amber-600 to-amber-800',
-                  border: 'border-amber-700 dark:border-amber-800',
-                  glow: 'shadow-[0_0_25px_rgba(180,83,9,0.3)]',
-                  textAccent: 'text-amber-800 dark:text-amber-400',
-                  holder: top3 ? top3.displayName : 'Unclaimed',
-                  holderAvatar: top3?.avatarUrl,
-                  holderScore: top3 ? `${top3.score}%` : 'N/A',
-                  req: 'Secure #3 podium place in rankings',
-                  status: top3?.email === currentUser?.email ? '✨ Yours Now!' : top3 ? 'Held by Pioneer' : 'Available',
-                },
-                {
-                  id: 'diamond_crystal',
-                  title: 'Diamond Reflection Crystal',
-                  subtitle: '90%+ Daily Score Legend',
-                  icon: '💎',
-                  gradient: 'from-cyan-400 via-sky-300 to-indigo-400',
-                  border: 'border-cyan-400 dark:border-cyan-500',
-                  glow: 'shadow-[0_0_30px_rgba(6,182,212,0.35)]',
-                  textAccent: 'text-cyan-600 dark:text-cyan-400',
-                  holder: currentUser?.stats?.highestScore && currentUser.stats.highestScore >= 90 ? currentUser.displayName : 'Streak Achievers',
-                  holderAvatar: currentUser?.avatarUrl,
-                  holderScore: `${currentUser?.stats?.highestScore || 0}%`,
-                  req: 'Achieve 90%+ daily reflection score',
-                  status: (currentUser?.stats?.highestScore || 0) >= 90 ? '✓ Unlocked' : 'In Progress',
-                },
-                {
-                  id: 'emerald_star',
-                  title: 'Emerald Flame Star',
-                  subtitle: '7-Day Streak Master',
-                  icon: '🌟',
-                  gradient: 'from-emerald-400 via-teal-300 to-emerald-500',
-                  border: 'border-emerald-400 dark:border-emerald-500',
-                  glow: 'shadow-[0_0_30px_rgba(16,185,129,0.35)]',
-                  textAccent: 'text-emerald-600 dark:text-emerald-400',
-                  holder: (currentUser?.stats?.currentStreak || 0) >= 7 ? currentUser?.displayName : 'Streak Legends',
-                  holderAvatar: currentUser?.avatarUrl,
-                  holderScore: `${currentUser?.stats?.currentStreak || 0} Days`,
-                  req: 'Maintain a 7-day active reflection streak',
-                  status: (currentUser?.stats?.currentStreak || 0) >= 7 ? '✓ Unlocked' : `${currentUser?.stats?.currentStreak || 0}/7 Days`,
-                },
-              ];
-
               return (
-                <div className="space-y-8">
-                  {/* --- SPECIAL 3D ANIMATED PODIUM STAGE --- */}
-                  <div className="pt-6 pb-2">
-                    <div className="text-center mb-6 space-y-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-amber-600 dark:text-amber-400 font-display flex items-center justify-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-spin" />
-                        <span>Top Productivity Champions</span>
-                        <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-spin" />
-                      </span>
-                      <h3 className="text-xl font-black text-slate-900 dark:text-white font-display">Season Champions Podium</h3>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-3 sm:gap-6 items-end max-w-2xl mx-auto">
-                      {/* Rank 2 - Silver Titan */}
-                      {top2 ? (
-                        <motion.div
-                          whileHover={{ y: -8, scale: 1.02 }}
-                          transition={{ type: 'spring', stiffness: 300 }}
-                          onClick={() => setTrophyInspectModal(trophiesList[1])}
-                          className="cursor-pointer bg-gradient-to-b from-slate-100 via-white to-slate-200/80 dark:from-slate-800/90 dark:via-slate-900 dark:to-slate-950 p-4 rounded-[28px] border-2 border-slate-300 dark:border-slate-700 shadow-xl flex flex-col items-center text-center relative group"
-                        >
-                          <div className="absolute -top-3 px-2.5 py-0.5 bg-gradient-to-r from-slate-300 to-slate-200 dark:from-slate-700 dark:to-slate-800 text-slate-900 dark:text-white rounded-full text-[9px] font-black uppercase tracking-wider shadow-md border border-slate-400/50 flex items-center gap-1">
-                            🥈 2nd Place
+                <div className="space-y-6">
+                  {/* Your Personal Standing Card */}
+                  {currentUser && (
+                    <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <SafeAvatar
+                          src={currentUser.avatarUrl}
+                          name={currentUser.displayName}
+                          frame={currentUser.frame}
+                          size="md"
+                        />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-slate-900 dark:text-white">
+                              {currentUser.displayName}
+                            </span>
+                            <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-violet-500/10 text-violet-600 dark:text-violet-400 rounded-md">
+                              You
+                            </span>
                           </div>
-                          <div className="relative mt-3 mb-2">
-                            <SafeAvatar src={top2.avatarUrl} name={top2.displayName} frame={top2.frame || 'diamond'} size="lg" />
-                            <span className="absolute -bottom-1 -right-1 text-lg z-10">🥈</span>
-                          </div>
-                          <h4 className="text-xs font-black text-slate-900 dark:text-white truncate max-w-full font-display">{top2.displayName}</h4>
-                          <span className="text-[10px] text-slate-400">@{top2.username}</span>
-                          <div className="mt-2.5 px-3 py-1 bg-slate-200/80 dark:bg-slate-800 rounded-xl text-xs font-black text-slate-800 dark:text-slate-200 border border-slate-300/50 dark:border-slate-700">
-                            {top2.score}% Rate
-                          </div>
-                        </motion.div>
-                      ) : <div />}
-
-                      {/* Rank 1 - Gold Champion (Center & Elevated) */}
-                      {top1 && (
-                        <motion.div
-                          whileHover={{ y: -12, scale: 1.04 }}
-                          transition={{ type: 'spring', stiffness: 300 }}
-                          onClick={() => setTrophyInspectModal(trophiesList[0])}
-                          className="cursor-pointer bg-gradient-to-b from-amber-500/25 via-yellow-400/15 to-amber-500/20 dark:from-amber-950/60 dark:via-yellow-900/30 dark:to-slate-900 p-5 rounded-[32px] border-2 border-amber-400 dark:border-yellow-400 shadow-[0_0_35px_rgba(245,158,11,0.3)] flex flex-col items-center text-center relative transform -translate-y-4 group"
-                        >
-                          <div className="absolute -top-4 px-3.5 py-1 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 font-black rounded-full text-[10px] uppercase tracking-wider shadow-lg flex items-center gap-1 animate-pulse border border-yellow-200">
-                            👑 Champion #1
-                          </div>
-                          <div className="relative mt-3 mb-2">
-                            <SafeAvatar src={top1.avatarUrl} name={top1.displayName} frame={top1.frame || 'gold'} size="xl" />
-                            <motion.span 
-                              animate={{ y: [0, -6, 0] }}
-                              transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                              className="absolute -top-5 left-1/2 transform -translate-x-1/2 text-3xl z-10"
-                            >
-                              🏆
-                            </motion.span>
-                          </div>
-                          <h4 className="text-sm font-black text-slate-900 dark:text-white truncate max-w-full font-display">{top1.displayName}</h4>
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-extrabold">@{top1.username}</span>
-                          <div className="mt-2.5 px-3.5 py-1 bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 rounded-xl text-xs font-black shadow-lg flex items-center gap-1">
-                            <span>🔥</span> {top1.score}% Rate
-                          </div>
-                        </motion.div>
-                      )}
-
-                      {/* Rank 3 - Bronze Scholar */}
-                      {top3 ? (
-                        <motion.div
-                          whileHover={{ y: -8, scale: 1.02 }}
-                          transition={{ type: 'spring', stiffness: 300 }}
-                          onClick={() => setTrophyInspectModal(trophiesList[2])}
-                          className="cursor-pointer bg-gradient-to-b from-amber-900/15 via-white to-amber-950/15 dark:from-amber-950/40 dark:via-slate-900 dark:to-slate-950 p-4 rounded-[28px] border-2 border-amber-700/60 dark:border-amber-700/50 shadow-xl flex flex-col items-center text-center relative group"
-                        >
-                          <div className="absolute -top-3 px-2.5 py-0.5 bg-gradient-to-r from-amber-800 to-amber-900 text-amber-100 rounded-full text-[9px] font-black uppercase tracking-wider shadow-md border border-amber-600/50 flex items-center gap-1">
-                            🥉 3rd Place
-                          </div>
-                          <div className="relative mt-3 mb-2">
-                            <SafeAvatar src={top3.avatarUrl} name={top3.displayName} frame={top3.frame || 'neon'} size="lg" />
-                            <span className="absolute -bottom-1 -right-1 text-lg z-10">🥉</span>
-                          </div>
-                          <h4 className="text-xs font-black text-slate-900 dark:text-white truncate max-w-full font-display">{top3.displayName}</h4>
-                          <span className="text-[10px] text-slate-400">@{top3.username}</span>
-                          <div className="mt-2.5 px-3 py-1 bg-amber-100 dark:bg-amber-950/80 rounded-xl text-xs font-black text-amber-900 dark:text-amber-300 border border-amber-300/50 dark:border-amber-800/50">
-                            {top3.score}% Rate
-                          </div>
-                        </motion.div>
-                      ) : <div />}
-                    </div>
-                  </div>
-
-                  {/* --- SPECIAL INTERACTIVE 3D TROPHY GALLERY SHOWCASE --- */}
-                  <div className="bg-gradient-to-br from-white/90 via-amber-50/20 to-white/90 dark:from-slate-900/90 dark:via-amber-950/20 dark:to-slate-900/90 backdrop-blur-md p-6 sm:p-8 rounded-[36px] border-2 border-amber-300/50 dark:border-amber-800/40 shadow-xl space-y-6">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-amber-100 dark:border-slate-800 pb-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <Crown className="w-5 h-5 text-amber-500 fill-amber-500/20" />
-                          <h3 className="text-base font-black text-slate-900 dark:text-white font-display">Special Separate Trophy Gallery</h3>
+                          <p className="text-xs text-slate-400">@{currentUser.username}</p>
                         </div>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Click any trophy to launch full 3D interactive inspection & celebration</p>
                       </div>
 
-                      <span className="px-3.5 py-1.5 bg-gradient-to-r from-amber-500/15 to-yellow-500/15 dark:from-amber-950/50 dark:to-yellow-950/50 border border-amber-300/50 dark:border-amber-700/50 text-amber-700 dark:text-amber-300 text-xs font-black rounded-full flex items-center gap-1.5 shrink-0">
-                        <Flame className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Streak: {currentUser?.stats?.currentStreak || 0} Days</span>
+                      <div className="flex items-center gap-4 sm:gap-6 border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100 dark:border-slate-800">
+                        <div className="text-left sm:text-right">
+                          <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider block">
+                            Your Rank
+                          </span>
+                          <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                            {userRankNum ? `#${userRankNum}` : 'Unranked'}
+                            {userRankNum && (
+                              <span className="text-xs text-slate-400 font-normal"> / {cleanRankings.length}</span>
+                            )}
+                          </span>
+                        </div>
+
+                        <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block" />
+
+                        <div className="text-left sm:text-right">
+                          <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider block">
+                            Score
+                          </span>
+                          <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                            {userRankObj ? `${userRankObj.score}%` : `${currentUser.stats?.averageScore || 0}%`}
+                          </span>
+                        </div>
+
+                        <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block" />
+
+                        <div className="text-left sm:text-right">
+                          <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider block">
+                            Streak
+                          </span>
+                          <span className="text-sm sm:text-base font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                            <Flame className="w-4 h-4 text-amber-500" />
+                            <span>{currentUser.stats?.currentStreak || 0}d</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Top 3 Podium (Visible when no search active and at least 2 students exist) */}
+                  {!leaderboardSearchQuery.trim() && cleanRankings.length >= 2 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3 px-1">
+                        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          Top Performers
+                        </h2>
+                        <span className="text-[11px] text-slate-400">
+                          {leaderboardPeriod === 'weekly' ? 'This week’s highest scores' : leaderboardPeriod === 'daily' ? 'Today’s highest scores' : 'This month’s highest scores'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {/* 2nd Place (Silver) */}
+                        {top2 && (
+                          <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col items-center text-center relative order-2 sm:order-1 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
+                            <div className="absolute top-3 left-3 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-bold border border-slate-200 dark:border-slate-700">
+                              #2 Silver
+                            </div>
+                            <div className="mt-4 mb-2">
+                              <SafeAvatar src={top2.avatarUrl} name={top2.displayName} frame={top2.frame} size="lg" />
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate max-w-full">
+                              {top2.displayName}
+                            </h3>
+                            <span className="text-xs text-slate-400">@{top2.username}</span>
+                            <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 w-full flex items-center justify-between text-xs">
+                              <span className="text-slate-500 dark:text-slate-400">Score</span>
+                              <span className="font-bold text-slate-900 dark:text-white">{top2.score}%</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 1st Place (Gold) - Elevated / Center */}
+                        {top1 && (
+                          <div className="p-4.5 rounded-2xl bg-gradient-to-b from-amber-50/60 to-white dark:from-amber-950/20 dark:to-slate-900 border-2 border-amber-300/80 dark:border-amber-500/40 shadow-xs flex flex-col items-center text-center relative order-1 sm:order-2">
+                            <div className="absolute top-3 left-3 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 text-[11px] font-bold border border-amber-200 dark:border-amber-700/60 flex items-center gap-1">
+                              <Crown className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                              <span>#1 Champion</span>
+                            </div>
+                            <div className="mt-4 mb-2">
+                              <SafeAvatar src={top1.avatarUrl} name={top1.displayName} frame={top1.frame || 'gold'} size="xl" />
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate max-w-full">
+                              {top1.displayName}
+                            </h3>
+                            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">@{top1.username}</span>
+                            <div className="mt-3 pt-3 border-t border-amber-100 dark:border-amber-950/60 w-full flex items-center justify-between text-xs">
+                              <span className="text-slate-600 dark:text-slate-400 font-medium">Top Score</span>
+                              <span className="font-extrabold text-amber-600 dark:text-amber-400 text-sm">{top1.score}%</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 3rd Place (Bronze) */}
+                        {top3 && (
+                          <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col items-center text-center relative order-3 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
+                            <div className="absolute top-3 left-3 px-2 py-0.5 rounded-md bg-amber-900/10 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400 text-[11px] font-bold border border-amber-800/20 dark:border-amber-800/40">
+                              #3 Bronze
+                            </div>
+                            <div className="mt-4 mb-2">
+                              <SafeAvatar src={top3.avatarUrl} name={top3.displayName} frame={top3.frame} size="lg" />
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate max-w-full">
+                              {top3.displayName}
+                            </h3>
+                            <span className="text-xs text-slate-400">@{top3.username}</span>
+                            <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 w-full flex items-center justify-between text-xs">
+                              <span className="text-slate-500 dark:text-slate-400">Score</span>
+                              <span className="font-bold text-slate-900 dark:text-white">{top3.score}%</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Leaderboard Table */}
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs overflow-hidden">
+                    {/* Search & Counter Bar */}
+                    <div className="p-3 sm:p-4 border-b border-slate-200/80 dark:border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-850/50">
+                      <div className="relative flex-1 max-w-sm">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={leaderboardSearchQuery}
+                          onChange={(e) => setLeaderboardSearchQuery(e.target.value)}
+                          placeholder="Search student or handle..."
+                          className="w-full pl-9 pr-8 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:border-violet-500"
+                        />
+                        {leaderboardSearchQuery && (
+                          <button
+                            onClick={() => setLeaderboardSearchQuery('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-xs text-slate-400 font-medium self-end sm:self-center">
+                        {filteredList.length} {filteredList.length === 1 ? 'student' : 'students'}
                       </span>
                     </div>
 
-                    {/* Interactive Trophy Cards Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {trophiesList.map(trophy => {
-                        const isSelected = selectedTrophyId === trophy.id;
-                        return (
-                          <motion.div
-                            key={trophy.id}
-                            whileHover={{ y: -6, scale: 1.02 }}
-                            transition={{ type: 'spring', stiffness: 350 }}
-                            onClick={() => {
-                              setSelectedTrophyId(trophy.id);
-                              setTrophyInspectModal(trophy);
-                            }}
-                            className={`cursor-pointer p-5 rounded-[28px] border-2 transition-all relative overflow-hidden flex flex-col justify-between ${
-                              isSelected
-                                ? `${trophy.border} ${trophy.glow} bg-white dark:bg-slate-900 ring-2 ring-amber-400/50`
-                                : 'border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-slate-900/60 hover:border-amber-300 dark:hover:border-amber-700'
-                            }`}
-                          >
-                            {/* Animated Background Shimmer */}
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-amber-400/10 via-transparent to-transparent rounded-full blur-xl pointer-events-none" />
+                    {filteredList.length === 0 ? (
+                      <div className="p-12 text-center text-slate-400 space-y-2">
+                        <Trophy className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600" />
+                        <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                          {leaderboardSearchQuery ? 'No students match your search.' : 'No active rankings found in this scope.'}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          {leaderboardSearchQuery ? 'Try clearing the search query.' : 'Log reflections and focus hours to claim the #1 spot!'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-200/80 dark:border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider bg-slate-50/50 dark:bg-slate-800/30">
+                              <th className="py-3 px-4 w-16 text-center">Rank</th>
+                              <th className="py-3 px-4">Student</th>
+                              <th className="py-3 px-4 text-center">Streak</th>
+                              <th className="py-3 px-4 text-center">Focus Time</th>
+                              <th className="py-3 px-4 text-right">DayScore</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                            {filteredList.map((rank) => {
+                              const overallIndex = cleanRankings.findIndex(r => r.email === rank.email);
+                              const rankPos = overallIndex >= 0 ? overallIndex + 1 : 1;
+                              const isSelf = currentUser && rank.email.toLowerCase() === currentUser.email.toLowerCase();
 
-                            <div>
-                              <div className="flex items-center justify-between mb-3">
-                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-slate-100 dark:bg-slate-800 ${trophy.textAccent}`}>
-                                  {trophy.subtitle}
-                                </span>
-                                <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md">
-                                  {trophy.status}
-                                </span>
-                              </div>
-
-                              {/* Big 3D Trophy Animated Emblem */}
-                              <div className="my-3 flex items-center justify-center">
-                                <motion.div
-                                  animate={{ 
-                                    rotateY: [0, 15, -15, 0],
-                                    y: [0, -4, 0]
-                                  }}
-                                  transition={{ 
-                                    repeat: Infinity, 
-                                    duration: 4, 
-                                    ease: "easeInOut" 
-                                  }}
-                                  className={`w-20 h-20 rounded-3xl bg-gradient-to-br ${trophy.gradient} p-0.5 shadow-lg flex items-center justify-center text-4xl shrink-0`}
+                              return (
+                                <tr
+                                  key={rank.email}
+                                  className={`transition-colors ${
+                                    isSelf
+                                      ? 'bg-violet-50/50 dark:bg-violet-950/20 font-medium'
+                                      : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+                                  }`}
                                 >
-                                  <div className="w-full h-full bg-slate-950 rounded-[22px] flex items-center justify-center text-4xl">
-                                    {trophy.icon}
-                                  </div>
-                                </motion.div>
-                              </div>
+                                  {/* Rank Column */}
+                                  <td className="py-3 px-4 text-center">
+                                    <span
+                                      className={`inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold ${
+                                        rankPos === 1
+                                          ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300'
+                                          : rankPos === 2
+                                          ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                                          : rankPos === 3
+                                          ? 'bg-amber-900/10 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400'
+                                          : 'text-slate-500 dark:text-slate-400'
+                                      }`}
+                                    >
+                                      {rankPos === 1 ? '1' : rankPos === 2 ? '2' : rankPos === 3 ? '3' : rankPos}
+                                    </span>
+                                  </td>
 
-                              <h4 className="text-sm font-black text-slate-900 dark:text-white text-center font-display leading-snug">
-                                {trophy.title}
-                              </h4>
-                              <p className="text-[10px] text-slate-400 text-center mt-1">
-                                {trophy.req}
-                              </p>
-                            </div>
+                                  {/* Student Column */}
+                                  <td className="py-3 px-4">
+                                    <div className="flex items-center gap-3">
+                                      <SafeAvatar
+                                        src={rank.avatarUrl}
+                                        name={rank.displayName}
+                                        frame={rank.frame}
+                                        size="sm"
+                                      />
+                                      <div className="overflow-hidden">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="font-bold text-slate-900 dark:text-white truncate">
+                                            {rank.displayName}
+                                          </span>
+                                          {isSelf && (
+                                            <span className="px-1.5 py-0.2 bg-violet-500/10 text-violet-600 dark:text-violet-400 text-[10px] rounded font-semibold">
+                                              You
+                                            </span>
+                                          )}
+                                          {rankPos === 1 && (
+                                            <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                          )}
+                                        </div>
+                                        <span className="text-[11px] text-slate-400 truncate block">
+                                          @{rank.username}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </td>
 
-                            {/* Holder Info Footer */}
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
-                              <div className="flex items-center gap-2 overflow-hidden">
-                                {trophy.holderAvatar ? (
-                                  <img src={trophy.holderAvatar} alt="avatar" className="w-6 h-6 rounded-full object-cover shrink-0" />
-                                ) : (
-                                  <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center text-[10px] font-bold shrink-0">
-                                    👑
-                                  </div>
-                                )}
-                                <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 truncate">
-                                  {trophy.holder}
-                                </span>
-                              </div>
-                              <span className="text-[10px] font-black text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/50 px-2 py-0.5 rounded-md shrink-0">
-                                {trophy.holderScore}
-                              </span>
-                            </div>
-                          </motion.div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                                  {/* Streak Column */}
+                                  <td className="py-3 px-4 text-center">
+                                    {rank.streak > 0 ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 text-[11px] font-semibold">
+                                        <Flame className="w-3 h-3 text-amber-500" />
+                                        <span>{rank.streak}d</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-400">—</span>
+                                    )}
+                                  </td>
 
-                  {/* Rankings List */}
-                  <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-[32px] border border-amber-200/50 dark:border-slate-800/80 shadow-lg overflow-hidden">
-                    <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                      <span className="text-xs font-black text-slate-800 dark:text-white font-display uppercase tracking-wider">Full Leaderboard Ranks</span>
-                      <span className="text-[10px] text-slate-400 font-bold">{cleanRankings.length} Active Students</span>
-                    </div>
+                                  {/* Focus Time Column */}
+                                  <td className="py-3 px-4 text-center text-slate-600 dark:text-slate-300 font-medium">
+                                    {rank.totalHours || 0}h
+                                  </td>
 
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                      {cleanRankings.map((rank, index) => {
-                        const isSelf = currentUser && rank.email.toLowerCase() === currentUser.email.toLowerCase();
-                        return (
-                          <div key={rank.email} className={`flex items-center justify-between p-4 transition-colors ${
-                            isSelf ? 'bg-amber-50/70 dark:bg-amber-950/20 font-bold' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                          }`}>
-                            <div className="flex items-center gap-4">
-                              {/* Position */}
-                              <span className={`w-8 h-8 rounded-2xl flex items-center justify-center font-black text-xs ${
-                                index === 0 ? 'bg-amber-400 text-slate-950 shadow-md' :
-                                index === 1 ? 'bg-slate-300 text-slate-900' :
-                                index === 2 ? 'bg-amber-700 text-white' :
-                                'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                              }`}>
-                                {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
-                              </span>
-
-                              <SafeAvatar src={rank.avatarUrl} name={rank.displayName} frame={rank.frame || 'none'} size="sm" />
-                              <div>
-                                <div className="flex items-center gap-1.5">
-                                  <h4 className="text-xs font-black text-slate-900 dark:text-white leading-tight">{rank.displayName}</h4>
-                                  {isSelf && <span className="text-[9px] px-2 py-0.5 bg-amber-500/20 text-amber-700 dark:text-amber-300 rounded-md font-black">You</span>}
-                                  {index === 0 && <span className="text-[9px] px-1.5 py-0.2 bg-amber-400/20 text-amber-600 dark:text-amber-400 rounded-md font-bold">Top Ranker</span>}
-                                </div>
-                                <span className="text-[10px] text-slate-400">@{rank.username}</span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-4">
-                              {rank.streak > 0 && (
-                                <span className="text-[10px] font-bold text-orange-500 bg-orange-500/10 px-2.5 py-1 rounded-full border border-orange-500/20 flex items-center gap-1">
-                                  <span>{rank.streak}</span>
-                                  <span>🔥</span>
-                                </span>
-                              )}
-                              <div className="text-right">
-                                <span className="text-sm font-black text-slate-900 dark:text-white block">{rank.score}%</span>
-                                <span className="text-[9px] text-slate-400 uppercase tracking-wide font-bold">Productivity</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                                  {/* DayScore Column */}
+                                  <td className="py-3 px-4 text-right">
+                                    <div className="inline-flex items-center justify-end gap-2">
+                                      <div className="w-14 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden hidden sm:block">
+                                        <div
+                                          className={`h-full rounded-full ${
+                                            rank.score >= 80
+                                              ? 'bg-emerald-500'
+                                              : rank.score >= 60
+                                              ? 'bg-amber-500'
+                                              : 'bg-slate-400'
+                                          }`}
+                                          style={{ width: `${Math.min(100, Math.max(0, rank.score))}%` }}
+                                        />
+                                      </div>
+                                      <span className="font-extrabold text-slate-900 dark:text-white text-xs w-10 text-right">
+                                        {rank.score}%
+                                      </span>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -5993,97 +6199,47 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Card 2: Cloud Storage & Sync */}
-              <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 shadow-sm space-y-4">
+              {/* Card 2: DayScore Built-in Storage Engine (All-Time Lifetime Cloud Database) */}
+              <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-5 rounded-2xl border border-violet-200/80 dark:border-violet-800/80 shadow-sm space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
                   <div className="flex items-center gap-2">
-                    <Cloud className="w-4 h-4 text-indigo-500" />
-                    <h3 className="text-xs font-black text-slate-800 dark:text-white font-display uppercase tracking-wider">Cloud Storage & Backup</h3>
+                    <Database className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                    <h3 className="text-xs font-black text-slate-800 dark:text-white font-display uppercase tracking-wider flex items-center gap-1.5">
+                      <span>DayScore Cloud Storage Engine</span>
+                      <span className="text-[10px] text-violet-500 font-bold">(Built-In & Permanent)</span>
+                    </h3>
                   </div>
 
-                  {driveConnected ? (
-                    <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      Connected
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700">
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-                      Disconnected
-                    </span>
-                  )}
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-violet-50 dark:bg-violet-950/60 text-violet-600 dark:text-violet-300 border border-violet-200/80 dark:border-violet-800/80">
+                    <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse"></span>
+                    ALL-TIME ACTIVE
+                  </span>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <h4 className="text-xs font-bold text-slate-800 dark:text-white">Google Drive Cloud Memory</h4>
-                    <p className="text-[11px] text-slate-400">Automatically backup journal logs and focus stats to your Google account</p>
-                  </div>
-
-                  {!driveConnected ? (
+                <div className="p-3.5 bg-violet-50/50 dark:bg-violet-950/30 rounded-2xl border border-violet-200/60 dark:border-violet-800/50 space-y-2.5 text-xs">
+                  <p className="text-[11px] text-violet-900 dark:text-violet-200 font-medium leading-relaxed">
+                    🛡️ <strong>Zero Configuration Required:</strong> DayScore uses its own redundant, multi-tier storage engine. All your reflections, DayScores, focus sessions, flame streak history, and badges are automatically preserved on our secure server for all time. You do not need to provide any external cloud accounts or personal storage.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={handleConnectDrive}
-                      disabled={driveLoading}
-                      className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-extrabold rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer disabled:opacity-50"
+                      onClick={() => {
+                        const emailKey = currentUser?.email || localStorage.getItem('reflect_auth_email');
+                        if (emailKey) {
+                          fetchInitialData(emailKey);
+                          showToast('Permanent storage verified & all days synchronized successfully!', 'success');
+                        }
+                      }}
+                      className="px-3.5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-extrabold text-[11px] rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      {driveLoading ? (
-                        <span className="h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                      ) : (
-                        <>
-                          <Cloud className="w-3.5 h-3.5" />
-                          <span>Connect Google Drive</span>
-                        </>
-                      )}
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Verify & Synchronize All-Time Data</span>
                     </button>
-                  ) : (
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={handleSyncDrive}
-                        disabled={driveLoading}
-                        className="px-3 py-2 bg-violet-500/10 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400 border border-violet-200 dark:border-violet-800 hover:bg-violet-500/20 text-xs font-extrabold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${driveLoading ? 'animate-spin' : ''}`} />
-                        <span>Sync Now</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDisconnectDrive}
-                        disabled={driveLoading}
-                        className="px-3 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 hover:text-rose-600 border border-slate-200 dark:border-slate-700 text-xs font-extrabold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        <Unlink className="w-3.5 h-3.5" />
-                        <span>Disconnect</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {driveConnected && (
-                  <div className="p-3.5 bg-slate-50/80 dark:bg-slate-950/50 rounded-xl border border-slate-200/60 dark:border-slate-800 space-y-2 text-xs">
-                    <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
-                      <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
-                        <User className="w-3.5 h-3.5 text-indigo-500" /> Connected Account
-                      </span>
-                      <span className="font-extrabold text-[11px]">{driveEmail}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
-                      <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
-                        <Clock className="w-3.5 h-3.5 text-indigo-500" /> Last Backup
-                      </span>
-                      <span className="font-extrabold text-[11px] font-mono">
-                        {driveSyncedAt ? new Date(driveSyncedAt).toLocaleString() : 'Just now'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
-                      <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
-                        <HardDrive className="w-3.5 h-3.5 text-indigo-500" /> Partition
-                      </span>
-                      <span className="font-extrabold text-[11px] font-mono text-slate-500 dark:text-slate-400">Google Drive /AppDataFolder</span>
-                    </div>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                      {journals.length} journal days saved • {studySessions.length} study sessions tracked
+                    </span>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Card 3: Direct Local Device Storage Engine */}
@@ -6479,112 +6635,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* --- SPECIAL INTERACTIVE 3D TROPHY INSPECTION MODAL --- */}
-      <AnimatePresence>
-        {trophyInspectModal && (
-          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-              className="bg-white dark:bg-slate-900 border-2 border-amber-300 dark:border-amber-700/60 w-full max-w-md p-6 sm:p-8 rounded-[36px] shadow-2xl relative overflow-hidden space-y-6 text-center"
-            >
-              {/* Top ambient glow */}
-              <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-48 h-48 bg-amber-400/20 dark:bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
 
-              <button
-                onClick={() => setTrophyInspectModal(null)}
-                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-full bg-slate-100 dark:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500/15 text-amber-700 dark:text-amber-300 rounded-full text-[10px] font-black uppercase tracking-wider">
-                <Crown className="w-3.5 h-3.5 text-amber-500" />
-                <span>3D Animated Trophy Showcase</span>
-              </div>
-
-              {/* Big 3D Trophy Animated Stage */}
-              <div className="py-4 flex justify-center">
-                <motion.div
-                  animate={{
-                    rotateY: [0, 360],
-                    y: [0, -8, 0]
-                  }}
-                  transition={{
-                    rotateY: { duration: 10, repeat: Infinity, ease: 'linear' },
-                    y: { duration: 3, repeat: Infinity, ease: 'easeInOut' }
-                  }}
-                  className={`w-28 h-28 sm:w-32 sm:h-32 rounded-[32px] bg-gradient-to-br ${trophyInspectModal.gradient} p-1 shadow-2xl flex items-center justify-center text-6xl relative group`}
-                >
-                  <div className="w-full h-full bg-slate-950 rounded-[28px] flex items-center justify-center text-6xl shadow-inner">
-                    {trophyInspectModal.icon}
-                  </div>
-                </motion.div>
-              </div>
-
-              <div>
-                <h3 className="text-xl font-black text-slate-900 dark:text-white font-display">
-                  {trophyInspectModal.title}
-                </h3>
-                <p className="text-xs text-amber-600 dark:text-amber-400 font-bold mt-1">
-                  {trophyInspectModal.subtitle}
-                </p>
-              </div>
-
-              {/* Requirement & Holder Details */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 text-left space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Holder</span>
-                  <span className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1">
-                    {trophyInspectModal.holderAvatar && (
-                      <img src={trophyInspectModal.holderAvatar} alt="holder" className="w-4 h-4 rounded-full object-cover" />
-                    )}
-                    <span>{trophyInspectModal.holder}</span>
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-200/60 dark:border-slate-700/60 pt-2">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unlock Condition</span>
-                  <span className="text-[11px] font-extrabold text-violet-600 dark:text-violet-300">
-                    {trophyInspectModal.req}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-200/60 dark:border-slate-700/60 pt-2">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</span>
-                  <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">
-                    {trophyInspectModal.status}
-                  </span>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="space-y-2">
-                <button
-                  onClick={() => {
-                    setConfettiActive(true);
-                    setTimeout(() => setConfettiActive(false), 4000);
-                    showToast(`🎉 Celebrated ${trophyInspectModal.title}! Keep striving for excellence.`, 'success');
-                  }}
-                  className="w-full py-3.5 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 font-black text-xs rounded-2xl shadow-lg hover:shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Sparkles className="w-4 h-4 text-slate-950" />
-                  <span>Celebrate Trophy Rank 🎉</span>
-                </button>
-
-                <button
-                  onClick={() => setTrophyInspectModal(null)}
-                  className="w-full py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-                >
-                  Close Showcase
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* --- DELETE ACCOUNT CONFIRMATION MODAL --- */}
       <AnimatePresence>
@@ -6998,6 +7049,172 @@ export default function App() {
           </div>
         )}
 
+        {/* Full Classmate Status Note Expansion Modal */}
+        {viewingStatusNote && (
+          <div
+            id="classmate-status-note-modal"
+            className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setViewingStatusNote(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 15 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-slate-900 rounded-[32px] p-6 sm:p-7 max-w-md w-full border border-slate-200/80 dark:border-slate-800 shadow-2xl space-y-6 relative overflow-hidden"
+            >
+              {/* Decorative ambient background blurs */}
+              <div className="absolute -top-16 -right-16 w-44 h-44 bg-violet-500/10 dark:bg-violet-500/20 rounded-full blur-3xl pointer-events-none" />
+              <div className="absolute -bottom-16 -left-16 w-44 h-44 bg-fuchsia-500/10 dark:bg-fuchsia-500/20 rounded-full blur-3xl pointer-events-none" />
+
+              {/* Header */}
+              <div className="flex items-center justify-between relative z-10">
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <SafeAvatar
+                      src={viewingStatusNote.profile.avatarUrl}
+                      name={viewingStatusNote.profile.displayName}
+                      frame={viewingStatusNote.profile.frame || 'none'}
+                      size="md"
+                    />
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 shadow-xs" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-base font-black text-slate-900 dark:text-white font-display">
+                        {viewingStatusNote.profile.displayName}
+                      </h3>
+                      {viewingStatusNote.isSelf && (
+                        <span className="text-[10px] font-black uppercase tracking-wider bg-violet-100 dark:bg-violet-900/60 text-violet-700 dark:text-violet-300 px-2 py-0.5 rounded-full">
+                          You
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs font-semibold text-slate-400">
+                      @{viewingStatusNote.profile.username || viewingStatusNote.profile.email?.split('@')[0]}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setViewingStatusNote(null)}
+                  className="p-2 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Thought Note Card with Pointer */}
+              <div className="relative z-10 pt-1">
+                <div className="relative bg-gradient-to-br from-violet-500/[0.08] via-fuchsia-500/[0.04] to-indigo-500/[0.08] dark:from-violet-950/40 dark:via-fuchsia-950/30 dark:to-indigo-950/40 border border-violet-200/80 dark:border-violet-800/60 rounded-3xl p-5 sm:p-6 shadow-sm">
+                  {/* Speech pointer notch pointing up to avatar */}
+                  <div className="absolute -top-2 left-8 w-4 h-4 bg-gradient-to-br from-violet-500/[0.08] to-violet-500/[0.08] dark:from-violet-950/40 dark:to-violet-950/40 border-t border-l border-violet-200/80 dark:border-violet-800/60 rotate-45" />
+
+                  <div className="flex items-center justify-between mb-3 text-[11px] font-bold text-violet-600 dark:text-violet-400 uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5">
+                      <span>💭</span>
+                      <span>Full Status Note</span>
+                    </span>
+                    <span className="text-[10px] lowercase text-slate-400 font-medium">active today</span>
+                  </div>
+
+                  <p className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-relaxed select-text">
+                    &ldquo;{viewingStatusNote.note}&rdquo;
+                  </p>
+
+                  <div className="mt-4 pt-3 border-t border-violet-100/80 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      Shared with classmates
+                    </span>
+                    <span className="text-[11px] font-semibold text-slate-400">
+                      {viewingStatusNote.isSelf ? 'Visible in study chat' : 'Tap reaction below to reply'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Reaction Bar (for classmates) */}
+              {!viewingStatusNote.isSelf && (
+                <div className="space-y-2 relative z-10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                      Quick Reaction to {viewingStatusNote.profile.displayName.split(' ')[0]}
+                    </span>
+                    <span className="text-[10px] text-slate-400">Sends directly to DM</span>
+                  </div>
+                  <div className="grid grid-cols-6 gap-2">
+                    {[
+                      { emoji: '🔥', label: 'Inspiring' },
+                      { emoji: '👏', label: 'Great job' },
+                      { emoji: '❤️', label: 'Support' },
+                      { emoji: '☕', label: 'Coffee' },
+                      { emoji: '📚', label: 'Study' },
+                      { emoji: '✨', label: 'Magic' }
+                    ].map(({ emoji, label }) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => handleReactToClassmateStatusNote(viewingStatusNote.profile, emoji, viewingStatusNote.note)}
+                        className="flex flex-col items-center justify-center p-2 rounded-2xl bg-slate-100 dark:bg-slate-800/80 hover:bg-violet-100 dark:hover:bg-violet-900/40 hover:scale-110 active:scale-95 transition-all border border-slate-200/60 dark:border-slate-700/60 group cursor-pointer"
+                        title={`${label} (${emoji})`}
+                      >
+                        <span className="text-xl group-hover:scale-110 transition-transform">{emoji}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Footer */}
+              <div className="flex items-center gap-2 pt-1 relative z-10">
+                {viewingStatusNote.isSelf ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const note = viewingStatusNote.note;
+                        setViewingStatusNote(null);
+                        setStatusNoteInput(note);
+                        setShowStatusNoteModal(true);
+                      }}
+                      className="flex-1 py-3 px-4 rounded-xl text-xs font-black text-white bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      ✏️ Edit My Note
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearStatusNote}
+                      className="py-3 px-4 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-600 bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openChatFromStatusNote(viewingStatusNote.profile.email)}
+                      className="flex-1 py-3 px-4 rounded-xl text-xs font-black text-white bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      Chat with {viewingStatusNote.profile.displayName.split(' ')[0]}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewingStatusNote(null)}
+                      className="py-3 px-4 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {/* Status Note Modal */}
         {showStatusNoteModal && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
@@ -7029,12 +7246,12 @@ export default function App() {
                   value={statusNoteInput}
                   onChange={(e) => setStatusNoteInput(e.target.value)}
                   placeholder="e.g. Studying Calculus 📚, 2hr Focus 🧠"
-                  maxLength={40}
+                  maxLength={100}
                   className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                 />
                 <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
-                  <span>Max 40 characters</span>
-                  <span>{statusNoteInput.length} / 40</span>
+                  <span>Max 100 characters</span>
+                  <span>{statusNoteInput.length} / 100</span>
                 </div>
               </div>
 

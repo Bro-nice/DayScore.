@@ -16,6 +16,7 @@ export interface Profile {
   bio: string;
   avatarUrl: string;
   frame?: AvatarFrame;
+  statusNote?: string;
   theme: 'light' | 'dark' | 'system';
   language: string;
   settings: {
