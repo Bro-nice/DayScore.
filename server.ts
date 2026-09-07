@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { createServer as createViteServer } from 'vite';
+// Dynamic Vite import in dev mode only
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
@@ -40,6 +40,7 @@ interface Profile {
   achievements: string[]; // unlocked achievement IDs
   gems?: number;
   streakFreezes?: number;
+  blockedUsers?: string[];
   driveTokens?: {
     accessToken: string;
     refreshToken?: string;
@@ -114,7 +115,11 @@ interface Message {
 }
 
 interface ChatRoom {
-  id: string; // usually "email1_email2" sorted
+  id: string; // usually "email1_email2" sorted or "group_..."
+  name?: string;
+  isGroup?: boolean;
+  avatarUrl?: string;
+  groupAdminEmail?: string;
   participants: string[]; // emails
   messages: Message[];
   typingEmails: string[];
@@ -138,6 +143,7 @@ interface DBState {
   chatRooms: ChatRoom[];
   friendRequests: FriendRequest[];
   friends: { [email: string]: string[] }; // email -> list of friend emails
+  blockedUsers?: { [email: string]: string[] }; // email -> list of blocked emails
 }
 
 let db: DBState = {
@@ -151,6 +157,7 @@ let db: DBState = {
   chatRooms: [],
   friendRequests: [],
   friends: {},
+  blockedUsers: {},
 };
 
 // --- PRE-SEEDED STUDENTS (CLASSMATES) & SINGLE INTELLIGENT AI COACH ---
@@ -352,6 +359,7 @@ function loadDB() {
     if (!db.chatRooms) db.chatRooms = [];
     if (!db.friendRequests) db.friendRequests = [];
     if (!db.friends) db.friends = {};
+    if (!db.blockedUsers) db.blockedUsers = {};
 
     // Ensure simulated classmates have statusNote
     SIMULATED_CLASSMATES.forEach(student => {
@@ -675,13 +683,47 @@ async function startServer() {
     return db.users[email] || null;
   };
 
-  // Helper to generate guaranteed unique username and display name across all users
-  const generateUniqueUserNames = (email: string, requestedDisplayName?: string) => {
+  // Helper to check if email is already taken across all users (case-insensitive)
+  const isEmailTaken = (email: string, excludeEmail?: string): boolean => {
+    if (!email) return false;
+    const clean = email.trim().toLowerCase();
+    return Object.values(db.users).some(u => 
+      u.email.toLowerCase() === clean && (!excludeEmail || u.email.toLowerCase() !== excludeEmail.toLowerCase())
+    );
+  };
+
+  // Helper to check if username or display name is already taken across any registered account
+  const isUsernameOrNameTaken = (nameOrUsername: string, excludeEmail?: string): { taken: boolean; reason?: string } => {
+    if (!nameOrUsername || !nameOrUsername.trim()) return { taken: false };
+    const clean = nameOrUsername.trim().toLowerCase();
+    const cleanAlphanumeric = clean.replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+
+    for (const u of Object.values(db.users)) {
+      if (excludeEmail && u.email.toLowerCase() === excludeEmail.toLowerCase()) {
+        continue;
+      }
+      // Check exact username match
+      if (u.username.toLowerCase() === clean || (cleanAlphanumeric && u.username.toLowerCase() === cleanAlphanumeric)) {
+        return { taken: true, reason: `Username "@${u.username}" is already taken by another account. Please choose a unique username.` };
+      }
+      // Check display name match
+      if (u.displayName.toLowerCase() === clean) {
+        return { taken: true, reason: `Name "${u.displayName}" is already in use by another account. Please choose a unique name.` };
+      }
+    }
+    return { taken: false };
+  };
+
+  // Helper to generate unique username and display name if not specified
+  const generateUniqueUserNames = (email: string, requestedDisplayName?: string, requestedUsername?: string) => {
     const existingUsers = Object.values(db.users);
     const existingUsernames = new Set(existingUsers.map(u => u.username.toLowerCase()));
     const existingDisplayNames = new Set(existingUsers.map(u => u.displayName.toLowerCase()));
 
-    let cleanBase = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    let cleanBase = (requestedUsername || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (!cleanBase) {
+      cleanBase = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    }
     if (!cleanBase || cleanBase.length < 2) cleanBase = 'student';
 
     let uniqueUsername = cleanBase;
@@ -714,10 +756,17 @@ async function startServer() {
   };
 
   // Helper to register user and seed initial classmate friends + welcome chat rooms
-  const registerNewUser = (email: string, displayName?: string, photoUrl?: string): Profile => {
-    const { username, displayName: finalDisplayName } = generateUniqueUserNames(email, displayName);
+  const registerNewUser = (email: string, displayName?: string, photoUrl?: string, customUsername?: string): Profile => {
+    const cleanEmail = email.trim().toLowerCase();
+    
+    // Safety check: if user already exists with this email, never duplicate
+    if (db.users[cleanEmail]) {
+      return db.users[cleanEmail];
+    }
+
+    const { username, displayName: finalDisplayName } = generateUniqueUserNames(cleanEmail, displayName, customUsername);
     const user: Profile = {
-      email,
+      email: cleanEmail,
       username,
       displayName: finalDisplayName,
       bio: 'Just another passionate student reflecting on their growth! 🌱',
@@ -742,7 +791,7 @@ async function startServer() {
       gems: 150,
       streakFreezes: 1,
     };
-    db.users[email] = user;
+    db.users[cleanEmail] = user;
     db.friends[email] = ['dayscore_ai@reflect.edu', 'emma@reflect.edu', 'lukas@reflect.edu']; // auto-add AI coach and classmates as friends
     
     // Auto-add back from AI coach and classmates
@@ -803,24 +852,89 @@ async function startServer() {
       pinnedBy: []
     });
 
+    // Create pre-seeded group chat room with multiple participants in a single ChatRoom ID!
+    const roomGroup = `group_study_squad_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    db.chatRooms.push({
+      id: roomGroup,
+      name: '🔥 Focus Sprint Study Squad',
+      isGroup: true,
+      avatarUrl: 'https://api.dicebear.com/7.x/identicon/svg?seed=StudySquad&backgroundColor=7c3aed,db2777',
+      groupAdminEmail: 'emma@reflect.edu',
+      participants: [email, 'emma@reflect.edu', 'lukas@reflect.edu', 'yuki@reflect.edu', 'dayscore_ai@reflect.edu'],
+      messages: [
+        {
+          id: `m_group_${roomGroup}_1`,
+          senderEmail: 'emma@reflect.edu',
+          text: `Hey squad! Welcome ${user.displayName} to our study group! 🎉 We share daily goals and keep each other accountable here.`,
+          timestamp: new Date(Date.now() - 7200000).toISOString(),
+          reactions: { '🙌': ['lukas@reflect.edu', 'yuki@reflect.edu'] },
+          read: true
+        },
+        {
+          id: `m_group_${roomGroup}_2`,
+          senderEmail: 'lukas@reflect.edu',
+          text: `Welcome @${user.username}! Let's hit high reflection scores this week. 💻🔥`,
+          timestamp: new Date(Date.now() - 5400000).toISOString(),
+          reactions: { '🔥': ['emma@reflect.edu'] },
+          read: true
+        },
+        {
+          id: `m_group_${roomGroup}_3`,
+          senderEmail: 'yuki@reflect.edu',
+          text: `Mindful study sessions keep the mind sharp! Excited to work together. 🌱✨`,
+          timestamp: new Date(Date.now() - 3600000).toISOString(),
+          reactions: { '❤️': ['emma@reflect.edu'] },
+          read: true
+        },
+        {
+          id: `m_group_${roomGroup}_4`,
+          senderEmail: 'dayscore_ai@reflect.edu',
+          text: `Welcome everyone to the squad! ✨ Tag me or ask any question when you need smart coaching, study plans, or reflection advice.`,
+          timestamp: new Date(Date.now() - 1800000).toISOString(),
+          reactions: { '✨': ['lukas@reflect.edu'] },
+          read: true
+        }
+      ],
+      typingEmails: [],
+      pinnedBy: [email]
+    });
+
     saveDB();
     return user;
   };
 
-  // 1a. Check if email is registered
+  // 1a. Check if email or username is registered / taken
   app.post('/api/auth/check', (req, res) => {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required.' });
-    }
-    const trimmedEmail = email.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(trimmedEmail)) {
-      return res.status(400).json({ error: 'Please enter a valid email format.' });
+    const { email, displayName, username } = req.body;
+    
+    let emailExists = false;
+    let usernameExists = false;
+    let usernameReason = '';
+
+    if (email) {
+      const trimmedEmail = email.trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmedEmail)) {
+        return res.status(400).json({ error: 'Please enter a valid email format.' });
+      }
+      emailExists = isEmailTaken(trimmedEmail);
     }
 
-    const exists = !!db.users[trimmedEmail];
-    res.json({ exists });
+    if (username || displayName) {
+      const nameToCheck = ((username || displayName) as string).trim();
+      const check = isUsernameOrNameTaken(nameToCheck, email ? email.trim().toLowerCase() : undefined);
+      if (check.taken) {
+        usernameExists = true;
+        usernameReason = check.reason || 'This username is already in use by another account.';
+      }
+    }
+
+    res.json({
+      exists: emailExists,
+      emailExists,
+      usernameExists,
+      usernameReason: usernameExists ? usernameReason : undefined,
+    });
   });
 
   // 1b. Standard Login with Password
@@ -859,7 +973,7 @@ async function startServer() {
 
   // 1c. Send Email Verification PIN for Registration
   app.post('/api/auth/send-verification-pin', async (req, res) => {
-    const { email } = req.body;
+    const { email, displayName, username } = req.body;
     if (!email) {
       return res.status(400).json({ error: 'Email address is required.' });
     }
@@ -869,8 +983,22 @@ async function startServer() {
       return res.status(400).json({ error: 'Please enter a valid active email address format (e.g., student@university.edu).' });
     }
 
-    if (db.users[trimmedEmail]) {
-      return res.status(400).json({ error: 'An account with this email address already exists. Please sign in instead.' });
+    if (isEmailTaken(trimmedEmail)) {
+      return res.status(400).json({ error: 'An account with this email address already exists. Multiple accounts with the same email are not allowed. Please log in instead.' });
+    }
+
+    if (displayName) {
+      const checkName = isUsernameOrNameTaken(displayName);
+      if (checkName.taken) {
+        return res.status(400).json({ error: checkName.reason || 'This name is already in use by another account. Please choose a unique name.' });
+      }
+    }
+
+    if (username) {
+      const checkUser = isUsernameOrNameTaken(username);
+      if (checkUser.taken) {
+        return res.status(400).json({ error: checkUser.reason || 'This username is already taken by another account. Please choose a unique username.' });
+      }
     }
 
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
@@ -894,7 +1022,7 @@ async function startServer() {
 
   // 1d. Verify PIN & Complete Account Registration
   app.post('/api/auth/verify-and-register', (req, res) => {
-    const { email, pin, password, displayName } = req.body;
+    const { email, pin, password, displayName, username } = req.body;
     if (!email || !pin) {
       return res.status(400).json({ error: 'Email and verification PIN are required.' });
     }
@@ -909,12 +1037,26 @@ async function startServer() {
       return res.status(400).json({ error: 'Invalid or expired 6-digit verification PIN. Please request a new code.' });
     }
 
-    if (db.users[trimmedEmail]) {
-      return res.status(400).json({ error: 'Account already registered. Please sign in.' });
+    if (isEmailTaken(trimmedEmail)) {
+      return res.status(400).json({ error: 'An account with this email address already exists. Multiple accounts with the same email are not allowed.' });
+    }
+
+    if (displayName) {
+      const checkName = isUsernameOrNameTaken(displayName);
+      if (checkName.taken) {
+        return res.status(400).json({ error: checkName.reason || 'This name is already in use by another account. Please choose a unique name.' });
+      }
+    }
+
+    if (username) {
+      const checkUser = isUsernameOrNameTaken(username);
+      if (checkUser.taken) {
+        return res.status(400).json({ error: checkUser.reason || 'This username is already taken by another account. Please choose a unique username.' });
+      }
     }
 
     // Register user account after successful email verification
-    const user = registerNewUser(trimmedEmail, displayName);
+    const user = registerNewUser(trimmedEmail, displayName, undefined, username);
     if (!db.passwords) db.passwords = {};
     db.passwords[trimmedEmail] = getSecurePasswordHash(password);
 
@@ -927,7 +1069,7 @@ async function startServer() {
 
   // 1e. Legacy/Direct Register Fallback Endpoint
   app.post('/api/auth/register', (req, res) => {
-    const { email, password, displayName } = req.body;
+    const { email, password, displayName, username } = req.body;
     if (!email) {
       return res.status(400).json({ error: 'Email is required.' });
     }
@@ -941,11 +1083,25 @@ async function startServer() {
       return res.status(400).json({ error: 'Password must be at least 6 characters long for account security.' });
     }
 
-    if (db.users[trimmedEmail]) {
-      return res.status(400).json({ error: 'Email is already registered.' });
+    if (isEmailTaken(trimmedEmail)) {
+      return res.status(400).json({ error: 'An account with this email address already exists. Multiple accounts with the same email are not allowed.' });
     }
 
-    const user = registerNewUser(trimmedEmail, displayName);
+    if (displayName) {
+      const checkName = isUsernameOrNameTaken(displayName);
+      if (checkName.taken) {
+        return res.status(400).json({ error: checkName.reason || 'This name is already in use by another account. Please choose a unique name.' });
+      }
+    }
+
+    if (username) {
+      const checkUser = isUsernameOrNameTaken(username);
+      if (checkUser.taken) {
+        return res.status(400).json({ error: checkUser.reason || 'This username is already taken by another account. Please choose a unique username.' });
+      }
+    }
+
+    const user = registerNewUser(trimmedEmail, displayName, undefined, username);
     if (!db.passwords) db.passwords = {};
     db.passwords[trimmedEmail] = getSecurePasswordHash(password);
     saveDB();
@@ -953,27 +1109,54 @@ async function startServer() {
     res.json({ user, token: generateAuthToken(trimmedEmail) });
   });
 
-  // 1f. Direct Google Sign-In (with Strong Password requirement & verification)
+  // 1f. Direct Google Sign-In (with Strong Password requirement & strict uniqueness checks)
   app.post('/api/auth/google', (req, res) => {
-    const { email, displayName, photoUrl, password } = req.body;
+    const { email, displayName, photoUrl, password, username, isSignUp } = req.body;
     if (!email) {
       return res.status(400).json({ error: 'Email address is required.' });
     }
     const trimmedEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmedEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email format.' });
+    }
 
     let user = db.users[trimmedEmail];
 
     if (!user) {
       // Registering new account via Google Sign-In
+      // 1. Check if email is already taken across any user
+      if (isEmailTaken(trimmedEmail)) {
+        return res.status(400).json({ error: 'An account with this email address already exists. Multiple accounts with the same email are not allowed. Please log in instead.' });
+      }
+
+      // 2. Check if display name or username is taken
+      const desiredName = (displayName || '').trim() || trimmedEmail.split('@')[0];
+      const checkName = isUsernameOrNameTaken(desiredName);
+      if (checkName.taken) {
+        return res.status(400).json({ error: checkName.reason || 'This name is already in use by another account. Please choose a unique name.' });
+      }
+
+      const desiredUsername = (username || '').trim() || desiredName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+      const checkUser = isUsernameOrNameTaken(desiredUsername);
+      if (checkUser.taken) {
+        return res.status(400).json({ error: checkUser.reason || 'This username is already taken by another account. Please choose a unique username.' });
+      }
+
       if (!password || password.length < 6) {
         return res.status(400).json({ error: 'Please set a strong password (at least 6 characters) to create your account.' });
       }
-      user = registerNewUser(trimmedEmail, displayName, photoUrl);
+
+      user = registerNewUser(trimmedEmail, desiredName, photoUrl, desiredUsername);
       if (!db.passwords) db.passwords = {};
       db.passwords[trimmedEmail] = getSecurePasswordHash(password);
       saveDB();
     } else {
       // Existing user logging in with Google account
+      if (isSignUp) {
+        return res.status(400).json({ error: 'An account with this email address already exists. Multiple accounts with the same email are not allowed. Please log in instead.' });
+      }
+
       if (!password) {
         return res.status(400).json({ error: 'Please enter your account password to log in.' });
       }
@@ -1055,6 +1238,8 @@ async function startServer() {
   app.get('/api/user/profile', (req, res) => {
     const user = getAuthenticatedUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!db.blockedUsers) db.blockedUsers = {};
+    user.blockedUsers = db.blockedUsers[user.email] || [];
     res.json({ user });
   });
 
@@ -1134,6 +1319,105 @@ async function startServer() {
     saveDB();
     triggerBackgroundSync(user);
     res.json({ success: true, statusNote: user.statusNote });
+  });
+
+  // Block a user (personal safety in chat & community)
+  app.post('/api/user/block', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { targetEmail } = req.body;
+    if (!targetEmail || typeof targetEmail !== 'string') {
+      return res.status(400).json({ error: 'Target email is required' });
+    }
+
+    const normTarget = targetEmail.trim().toLowerCase();
+    if (normTarget === user.email.toLowerCase()) {
+      return res.status(400).json({ error: 'You cannot block yourself' });
+    }
+
+    if (!db.blockedUsers) db.blockedUsers = {};
+    if (!db.blockedUsers[user.email]) db.blockedUsers[user.email] = [];
+
+    if (!db.blockedUsers[user.email].includes(normTarget)) {
+      db.blockedUsers[user.email].push(normTarget);
+    }
+
+    user.blockedUsers = [...db.blockedUsers[user.email]];
+
+    // Cancel any pending friend requests between them
+    db.friendRequests = db.friendRequests.filter(
+      r => !(
+        (r.fromEmail.toLowerCase() === user.email.toLowerCase() && r.toEmail.toLowerCase() === normTarget) ||
+        (r.fromEmail.toLowerCase() === normTarget && r.toEmail.toLowerCase() === user.email.toLowerCase())
+      )
+    );
+
+    saveDB();
+    triggerBackgroundSync(user);
+
+    const targetUser = db.users[normTarget];
+    res.json({
+      success: true,
+      message: `Blocked ${targetUser?.displayName || normTarget}`,
+      blockedUsers: db.blockedUsers[user.email]
+    });
+  });
+
+  // Unblock a user
+  app.post('/api/user/unblock', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { targetEmail } = req.body;
+    if (!targetEmail || typeof targetEmail !== 'string') {
+      return res.status(400).json({ error: 'Target email is required' });
+    }
+
+    const normTarget = targetEmail.trim().toLowerCase();
+    if (!db.blockedUsers) db.blockedUsers = {};
+    if (!db.blockedUsers[user.email]) db.blockedUsers[user.email] = [];
+
+    db.blockedUsers[user.email] = db.blockedUsers[user.email].filter(e => e.toLowerCase() !== normTarget);
+    user.blockedUsers = [...db.blockedUsers[user.email]];
+
+    saveDB();
+    triggerBackgroundSync(user);
+
+    const targetUser = db.users[normTarget];
+    res.json({
+      success: true,
+      message: `Unblocked ${targetUser?.displayName || normTarget}`,
+      blockedUsers: db.blockedUsers[user.email]
+    });
+  });
+
+  // Get list of blocked users with full profiles
+  app.get('/api/user/blocked', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    if (!db.blockedUsers) db.blockedUsers = {};
+    const blockedEmails = db.blockedUsers[user.email] || [];
+    
+    const blockedProfiles = blockedEmails.map(email => {
+      const p = db.users[email];
+      if (p) return p;
+      return {
+        email,
+        username: email.split('@')[0],
+        displayName: email.split('@')[0],
+        bio: 'Student Classmate',
+        avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`,
+        theme: 'system' as const,
+        language: 'English',
+        settings: { notifications: true, aiCoachingLevel: 'standard' as const, isProfilePublic: true, showOnlineStatus: true },
+        stats: { averageScore: 0, highestScore: 0, longestStreak: 0, currentStreak: 0, totalStudyHours: 0, lastActiveDate: '' },
+        achievements: []
+      };
+    });
+
+    res.json({ blockedUsers: blockedProfiles });
   });
 
   // Delete account & erase all user data permanently
@@ -1771,7 +2055,7 @@ async function startServer() {
         const promptText = `Analyze this student reflection journal and evaluate their productivity, focus, alignment with habits, and emotional/learning flow. Output JSON matches schema strictly. Do not score individual activities. Only evaluate the overall day holistically. Reflection Text: "${entry.text}"`;
         
         const aiResponse = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
+          model: 'gemini-3.8-flash',
           contents: promptText,
           config: {
             thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
@@ -1930,20 +2214,46 @@ async function startServer() {
 
         console.log(`Transcribing voice recording for user ${user.email} (${cleanMimeType})...`);
 
-        const aiResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: [
-            {
-              inlineData: {
-                mimeType: cleanMimeType,
-                data: base64Content,
+        let transcript = '';
+        try {
+          // Dedicated audio transcription model for fastest response and highest accuracy
+          const aiResponse = await ai.models.generateContent({
+            model: 'gemini-3.5-transcribe',
+            contents: [
+              {
+                inlineData: {
+                  mimeType: cleanMimeType,
+                  data: base64Content,
+                },
               },
-            },
-            "Transcribe this spoken voice recording with high precision. Clean up stuttering, repeats, or filler words naturally, and format with proper punctuation, sentence capitalization, and clear structure. Output ONLY the transcribed text string."
-          ],
-        });
+              {
+                text: "Transcribe this spoken voice recording with high precision. Clean up stuttering, repeats, or filler words naturally, and format with proper punctuation, sentence capitalization, and clear structure. Output ONLY the transcribed text string."
+              }
+            ],
+          });
+          transcript = aiResponse.text?.trim() || '';
+        } catch (primaryErr) {
+          console.warn('gemini-3.5-transcribe fallback to gemini-3.8-flash:', primaryErr);
+          const aiResponse = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: [
+              {
+                inlineData: {
+                  mimeType: cleanMimeType,
+                  data: base64Content,
+                },
+              },
+              {
+                text: "Transcribe this spoken voice recording with high precision. Clean up stuttering, repeats, or filler words naturally, and format with proper punctuation, sentence capitalization, and clear structure. Output ONLY the transcribed text string."
+              }
+            ],
+            config: {
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+            }
+          });
+          transcript = aiResponse.text?.trim() || '';
+        }
 
-        const transcript = aiResponse.text?.trim() || '';
         if (transcript) {
           return res.json({ success: true, transcript });
         }
@@ -2046,9 +2356,10 @@ ${journalSummaryText || 'No previous reflections logged yet. Generate standard h
 Output JSON strictly as an array of objects with keys "text" (concise action) and "category" (Academic, Focus, Health, or Habit).`;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3.5-flash',
+          model: 'gemini-3.8-flash',
           contents: promptText,
           config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.ARRAY,
@@ -2241,24 +2552,333 @@ Output JSON strictly as an array of objects with keys "text" (concise action) an
           }
         ],
         typingEmails: [],
-        pinnedBy: []
+        pinnedBy: [user.email]
       };
       db.chatRooms.push(aiRoom);
       saveDB();
     }
 
-    const aiProfile = db.users[aiEmail];
-    const roomsWithPeer = [{
-      ...aiRoom,
-      peer: {
-        email: aiEmail,
-        displayName: aiProfile.displayName,
-        avatarUrl: aiProfile.avatarUrl,
-        online: true,
+    // Ensure classmate chat rooms exist so user can chat with and block/unblock classmates
+    SIMULATED_CLASSMATES.forEach(classmate => {
+      if (classmate.email === aiEmail || classmate.email === user.email) return;
+      const existingRoom = db.chatRooms.find(r => r.participants.includes(user.email) && r.participants.includes(classmate.email));
+      if (!existingRoom) {
+        const roomId = [classmate.email, user.email].sort().join('_');
+        const welcomeTexts: { [key: string]: string } = {
+          'emma@reflect.edu': "Hey! Saw your focus goals in class. Let's keep each other accountable this week!",
+          'lukas@reflect.edu': "Yo! Let me know if you need review notes on algorithms or calculus. We got this! 🔥",
+          'yuki@reflect.edu': "Kon'nichiwa! Ready for another mindful day of reflection and deep learning? ✨"
+        };
+        db.chatRooms.push({
+          id: roomId,
+          participants: [classmate.email, user.email].sort(),
+          messages: [{
+            id: `m_init_${roomId}`,
+            senderEmail: classmate.email,
+            text: welcomeTexts[classmate.email] || `Hello ${user.displayName}! Great to connect with you on DayScore.`,
+            timestamp: new Date(Date.now() - 3600000).toISOString(),
+            reactions: {},
+            read: false
+          }],
+          typingEmails: [],
+          pinnedBy: []
+        });
+        saveDB();
       }
-    }];
+    });
+
+    // Ensure user has at least one group chat (Study Squad) with multiple participants
+    let groupRoom = db.chatRooms.find(r => (r.isGroup || r.participants.length > 2) && r.participants.includes(user.email));
+    if (!groupRoom) {
+      const roomGroup = `group_study_squad_${user.email.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      groupRoom = {
+        id: roomGroup,
+        name: '🔥 Focus Sprint Study Squad',
+        isGroup: true,
+        avatarUrl: 'https://api.dicebear.com/7.x/identicon/svg?seed=StudySquad&backgroundColor=7c3aed,db2777',
+        groupAdminEmail: 'emma@reflect.edu',
+        participants: [user.email, 'emma@reflect.edu', 'lukas@reflect.edu', 'yuki@reflect.edu', 'dayscore_ai@reflect.edu'],
+        messages: [
+          {
+            id: `m_group_${roomGroup}_1`,
+            senderEmail: 'emma@reflect.edu',
+            text: `Hey squad! Welcome ${user.displayName} to our study group! 🎉 We share daily goals and keep each other accountable here.`,
+            timestamp: new Date(Date.now() - 7200000).toISOString(),
+            reactions: { '🙌': ['lukas@reflect.edu', 'yuki@reflect.edu'] },
+            read: true
+          },
+          {
+            id: `m_group_${roomGroup}_2`,
+            senderEmail: 'lukas@reflect.edu',
+            text: `Welcome @${user.username}! Let's hit high reflection scores this week. 💻🔥`,
+            timestamp: new Date(Date.now() - 5400000).toISOString(),
+            reactions: { '🔥': ['emma@reflect.edu'] },
+            read: true
+          },
+          {
+            id: `m_group_${roomGroup}_3`,
+            senderEmail: 'yuki@reflect.edu',
+            text: `Mindful study sessions keep the mind sharp! Excited to work together. 🌱✨`,
+            timestamp: new Date(Date.now() - 3600000).toISOString(),
+            reactions: { '❤️': ['emma@reflect.edu'] },
+            read: true
+          },
+          {
+            id: `m_group_${roomGroup}_4`,
+            senderEmail: 'dayscore_ai@reflect.edu',
+            text: `Welcome everyone to the squad! ✨ Tag me or ask any question when you need smart coaching, study plans, or reflection advice.`,
+            timestamp: new Date(Date.now() - 1800000).toISOString(),
+            reactions: { '✨': ['lukas@reflect.edu'] },
+            read: true
+          }
+        ],
+        typingEmails: [],
+        pinnedBy: [user.email]
+      };
+      db.chatRooms.push(groupRoom);
+      saveDB();
+    }
+
+    if (!db.blockedUsers) db.blockedUsers = {};
+    const userBlockedList = (db.blockedUsers[user.email] || []).map(e => e.toLowerCase());
+
+    const allUserRooms = db.chatRooms.filter(r => r.participants.includes(user.email));
+
+    const roomsWithPeer = allUserRooms.map(room => {
+      const isGroup = Boolean(room.isGroup || room.participants.length > 2);
+
+      // Build profile list for all participants in this chat room
+      const participantProfiles = room.participants.map(email => {
+        const profile = db.users[email] || {
+          email,
+          username: email.split('@')[0],
+          displayName: email.split('@')[0],
+          avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`,
+          bio: 'Student Classmate',
+          statusNote: '',
+          stats: { averageScore: 85, highestScore: 92, longestStreak: 12, currentStreak: 5, totalStudyHours: 48, lastActiveDate: '' },
+        };
+        const isPeerBlocked = userBlockedList.includes(email.toLowerCase());
+        return {
+          email: profile.email,
+          displayName: profile.displayName,
+          username: profile.username || email.split('@')[0],
+          avatarUrl: profile.avatarUrl,
+          frame: (profile as any).frame,
+          bio: profile.bio,
+          statusNote: profile.statusNote,
+          stats: profile.stats,
+          online: true,
+          isBlockedByMe: isPeerBlocked,
+          role: email === room.groupAdminEmail ? ('admin' as const) : ('member' as const),
+        };
+      });
+
+      const peerEmail = room.participants.find(e => e !== user.email) || aiEmail;
+      const peerProfile = db.users[peerEmail] || {
+        email: peerEmail,
+        username: peerEmail.split('@')[0],
+        displayName: peerEmail.split('@')[0],
+        avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${peerEmail}`,
+        bio: 'Student Classmate',
+        statusNote: '',
+        stats: { averageScore: 85, highestScore: 92, longestStreak: 12, currentStreak: 5, totalStudyHours: 48, lastActiveDate: '' },
+      };
+
+      const peerBlockedList = (db.blockedUsers[peerEmail] || []).map(e => e.toLowerCase());
+      const isBlockedByMe = userBlockedList.includes(peerEmail.toLowerCase());
+      const hasBlockedMe = peerBlockedList.includes(user.email.toLowerCase());
+
+      const defaultGroupName = room.name || (isGroup
+        ? participantProfiles.filter(p => p.email !== user.email).slice(0, 3).map(p => p.displayName.split(' ')[0]).join(', ') + (participantProfiles.length > 4 ? ` +${participantProfiles.length - 4}` : '') + ' & You'
+        : peerProfile.displayName);
+
+      return {
+        ...room,
+        isGroup,
+        name: isGroup ? defaultGroupName : (room.name || peerProfile.displayName),
+        avatarUrl: room.avatarUrl || (isGroup ? `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(room.id)}&backgroundColor=7c3aed,db2777` : peerProfile.avatarUrl),
+        participantProfiles,
+        isBlockedByMe,
+        hasBlockedMe,
+        peer: isGroup ? {
+          email: 'group_' + room.id,
+          displayName: defaultGroupName,
+          username: `group_${room.participants.length}_members`,
+          avatarUrl: room.avatarUrl || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(room.id)}&backgroundColor=7c3aed,db2777`,
+          online: true,
+          isGroup: true,
+          memberCount: room.participants.length
+        } : {
+          email: peerEmail,
+          displayName: peerProfile.displayName,
+          username: peerProfile.username || peerEmail.split('@')[0],
+          avatarUrl: peerProfile.avatarUrl,
+          frame: (peerProfile as any).frame,
+          bio: peerProfile.bio,
+          statusNote: peerProfile.statusNote,
+          stats: peerProfile.stats,
+          online: true,
+          isBlockedByMe,
+          hasBlockedMe,
+        }
+      };
+    });
+
+    // Pinned rooms first, then newest message
+    roomsWithPeer.sort((a, b) => {
+      const aPinned = (a.pinnedBy || []).includes(user.email) ? 1 : 0;
+      const bPinned = (b.pinnedBy || []).includes(user.email) ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+
+      const aTime = a.messages.length > 0 ? new Date(a.messages[a.messages.length - 1].timestamp).getTime() : 0;
+      const bTime = b.messages.length > 0 ? new Date(b.messages[b.messages.length - 1].timestamp).getTime() : 0;
+      return bTime - aTime;
+    });
 
     res.json({ rooms: roomsWithPeer });
+  });
+
+  // Create new group chat room with multiple participants
+  app.post('/api/chat/rooms/group', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { name, participantEmails, initialMessage } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Group name is required' });
+    }
+
+    const selectedEmails: string[] = Array.isArray(participantEmails) ? participantEmails : [];
+    const allEmails = Array.from(new Set([user.email, ...selectedEmails].filter(Boolean)));
+    if (allEmails.length < 2) {
+      return res.status(400).json({ error: 'Please select at least 1 other participant to create a group' });
+    }
+
+    const roomId = 'group_' + Date.now() + '_' + Math.random().toString(36).substr(2, 7);
+    const messages: Message[] = [];
+
+    messages.push({
+      id: 'm_sys_' + Date.now(),
+      senderEmail: user.email,
+      text: initialMessage && initialMessage.trim()
+        ? initialMessage.trim()
+        : `👋 Welcome to ${name.trim()}! Group created by ${user.displayName}.`,
+      timestamp: new Date().toISOString(),
+      reactions: {},
+      read: true
+    });
+
+    const newRoom: ChatRoom = {
+      id: roomId,
+      name: name.trim(),
+      isGroup: true,
+      avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(name.trim())}&backgroundColor=7c3aed,db2777`,
+      groupAdminEmail: user.email,
+      participants: allEmails,
+      messages,
+      typingEmails: [],
+      pinnedBy: [user.email]
+    };
+
+    db.chatRooms.push(newRoom);
+    saveDB();
+
+    res.json({ success: true, room: newRoom });
+  });
+
+  // Add participant(s) to a chat room (upgrading 1-on-1 to group, or adding members to group)
+  app.post('/api/chat/rooms/:roomId/participants', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const room = db.chatRooms.find(r => r.id === req.params.roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!room.participants.includes(user.email)) return res.status(403).json({ error: 'Forbidden' });
+
+    const { email, emails } = req.body;
+    const toAdd: string[] = emails && Array.isArray(emails) ? emails : (email ? [email] : []);
+    if (toAdd.length === 0) return res.status(400).json({ error: 'No participants provided' });
+
+    const newlyAdded: string[] = [];
+    toAdd.forEach(e => {
+      if (e && !room.participants.includes(e)) {
+        room.participants.push(e);
+        newlyAdded.push(e);
+      }
+    });
+
+    if (newlyAdded.length > 0) {
+      room.isGroup = true;
+      if (!room.name) {
+        room.name = 'Study Group (' + room.participants.length + ')';
+      }
+      if (!room.groupAdminEmail) {
+        room.groupAdminEmail = user.email;
+      }
+      const addedNames = newlyAdded.map(e => db.users[e]?.displayName || e.split('@')[0]).join(', ');
+      room.messages.push({
+        id: 'm_sys_' + Date.now(),
+        senderEmail: user.email,
+        text: `📢 ${user.displayName} added ${addedNames} to the group.`,
+        timestamp: new Date().toISOString(),
+        reactions: {},
+        read: true
+      });
+      saveDB();
+    }
+
+    res.json({ success: true, room });
+  });
+
+  // Remove / leave participant from group
+  app.delete('/api/chat/rooms/:roomId/participants/:participantEmail', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const room = db.chatRooms.find(r => r.id === req.params.roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!room.participants.includes(user.email)) return res.status(403).json({ error: 'Forbidden' });
+
+    const targetEmail = req.params.participantEmail;
+    if (targetEmail !== user.email && room.groupAdminEmail !== user.email) {
+      return res.status(403).json({ error: 'Only group admin can remove other members' });
+    }
+
+    const idx = room.participants.indexOf(targetEmail);
+    if (idx > -1) {
+      room.participants.splice(idx, 1);
+      const targetUser = db.users[targetEmail];
+      const targetName = targetUser?.displayName || targetEmail.split('@')[0];
+      room.messages.push({
+        id: 'm_sys_' + Date.now(),
+        senderEmail: user.email,
+        text: `🚪 ${targetName} ${targetEmail === user.email ? 'left' : 'was removed from'} the group.`,
+        timestamp: new Date().toISOString(),
+        reactions: {},
+        read: true
+      });
+      saveDB();
+    }
+
+    res.json({ success: true, room });
+  });
+
+  // Update group name or avatar
+  app.put('/api/chat/rooms/:roomId', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const room = db.chatRooms.find(r => r.id === req.params.roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!room.participants.includes(user.email)) return res.status(403).json({ error: 'Forbidden' });
+
+    const { name, avatarUrl } = req.body;
+    if (name && name.trim()) room.name = name.trim();
+    if (avatarUrl && avatarUrl.trim()) room.avatarUrl = avatarUrl.trim();
+
+    saveDB();
+    res.json({ success: true, room });
   });
 
   app.get('/api/chat/rooms/:roomId/messages', (req, res) => {
@@ -2286,6 +2906,20 @@ Output JSON strictly as an array of objects with keys "text" (concise action) an
     if (!room) return res.status(404).json({ error: 'Room not found' });
     if (!room.participants.includes(user.email)) return res.status(403).json({ error: 'Forbidden' });
 
+    const isGroup = Boolean(room.isGroup || room.participants.length > 2);
+    const peerEmail = !isGroup ? room.participants.find(email => email !== user.email) : undefined;
+    if (!db.blockedUsers) db.blockedUsers = {};
+    const userBlockedList = (db.blockedUsers[user.email] || []).map(e => e.toLowerCase());
+
+    if (!isGroup && peerEmail && userBlockedList.includes(peerEmail.toLowerCase())) {
+      return res.status(403).json({ error: 'You have blocked this user. Unblock them to send messages.' });
+    }
+
+    const peerBlockedList = peerEmail ? (db.blockedUsers[peerEmail] || []).map(e => e.toLowerCase()) : [];
+    if (!isGroup && peerEmail && peerBlockedList.includes(user.email.toLowerCase())) {
+      return res.status(403).json({ error: 'You cannot send messages to this contact.' });
+    }
+
     const { text, audioUrl, audioDuration } = req.body;
     if (!text || !text.trim()) return res.status(400).json({ error: 'Message text is required' });
 
@@ -2302,60 +2936,73 @@ Output JSON strictly as an array of objects with keys "text" (concise action) an
 
     room.messages.push(message);
 
-    // Real-time peer/AI Coach response simulation
-    const peerEmail = room.participants.find(email => email !== user.email);
-    if (peerEmail && SIMULATED_CLASSMATES.some(c => c.email === peerEmail)) {
-      const isAiCoach = peerEmail === 'dayscore_ai@reflect.edu';
-      const delayMs = isAiCoach ? 200 : 2500; // Hyper-fast 200ms response time for AI Coach
+    // Multi-user & simulated classmate / AI response logic
+    // Determine which simulated participant in this room should reply (if any)
+    const simulatedPeers = SIMULATED_CLASSMATES.filter(c => 
+      c.email !== user.email && room.participants.includes(c.email)
+    );
+
+    if (simulatedPeers.length > 0) {
+      let chosenPeer = simulatedPeers[0];
+
+      // If user mentioned ai or coach, or 1-on-1 with AI Coach
+      const textLower = text.toLowerCase();
+      const mentionsAi = textLower.includes('coach') || textLower.includes('ai') || textLower.includes('score') || textLower.includes('@dayscore_ai');
+      const aiPeer = simulatedPeers.find(p => p.email === 'dayscore_ai@reflect.edu');
+
+      if (mentionsAi && aiPeer) {
+        chosenPeer = aiPeer;
+      } else if (isGroup) {
+        // In group, pick a random classmate from simulated members (or rotate)
+        const classmatesOnly = simulatedPeers.filter(p => p.email !== 'dayscore_ai@reflect.edu');
+        if (classmatesOnly.length > 0) {
+          chosenPeer = classmatesOnly[Math.floor(Math.random() * classmatesOnly.length)];
+        }
+      }
+
+      const isAiCoach = chosenPeer.email === 'dayscore_ai@reflect.edu';
+      const delayMs = isAiCoach ? 300 : 2200;
 
       setTimeout(async () => {
-        const classmate = SIMULATED_CLASSMATES.find(c => c.email === peerEmail);
-        if (!classmate) return;
-
         let replyText = isAiCoach
-          ? "I hear you completely. I am right here with you with crystal-clear logic and deep emotional support. Let's tackle this step by step!"
+          ? (isGroup 
+              ? `Great thought, ${user.displayName}! Keeping group synergy high helps everyone stay locked in and reach peak DayScores! ✨` 
+              : `I hear you completely. I am right here with you with crystal-clear logic and deep emotional support. Let's tackle this step by step!`)
           : `That sounds awesome! Let's stay focused. 🚀`;
 
         const ai = getAIClient();
         if (ai) {
           try {
-            // Build conversation history from recent room messages
             const recentHistory = room.messages.slice(-10).map(m => {
+              const senderUser = db.users[m.senderEmail];
               const name = m.senderEmail === user.email 
                 ? user.displayName 
-                : (m.senderEmail === 'dayscore_ai@reflect.edu' ? 'DayScore AI Coach' : classmate.displayName);
+                : (senderUser ? senderUser.displayName : m.senderEmail.split('@')[0]);
               return `${name}: ${m.text}`;
             }).join('\n');
 
             const context = isAiCoach
-              ? `You are DayScore AI Coach ✨, an intelligent, highly logical, deeply empathetic, and supportive self-improvement mentor inside the BaBU Student Hub application.
+              ? `You are DayScore AI Coach ✨, an intelligent, highly logical, deeply empathetic mentor inside a ${isGroup ? 'student study group chat' : 'direct student coaching chat'} in the BaBU Student Hub application.
 
 STUDENT INFORMATION:
 - Name: ${user.displayName} (@${user.username})
 - Current Streak: ${user.stats.currentStreak} days
 - Average Score: ${user.stats.averageScore}/100
-- Study Hours: ${user.stats.totalStudyHours} hrs
 
-CORE BEHAVIOR RULES:
-1. HIGH LOGICAL & ANALYTICAL INTELLIGENCE: Give clear, structured, logically sound guidance on study schedules, problem solving, learning strategies, time management, and academic questions.
-2. HIGH EMOTIONAL INTELLIGENCE: Validate emotional states (stress, fatigue, anxiety, excitement), offer authentic warmth, encouragement, and active listening. Never judge or shame.
-3. PERSONALIZED & CONVERSATIONAL: Reference previous chat context and user details smoothly.
-4. CONCISE & ARTICULATE: Keep answers crisp, warm, and highly engaging (2-4 sentences or clear bullet points).
-
-RECENT CONVERSATION HISTORY:
+RECENT CHAT HISTORY:
 ${recentHistory}
 
 Student's Latest Message: "${text}"
 
-Respond directly to ${user.displayName} with deep logical brilliance, warmth, and supportive coaching:`
-              : `You are student classmate ${classmate.displayName} (bio: ${classmate.bio}).
+Respond naturally as DayScore AI Coach ✨ in 1-3 sentences with encouragement, logic, and warmth:`
+              : `You are student classmate ${chosenPeer.displayName} (bio: ${chosenPeer.bio}) participating in a ${isGroup ? 'study group chat' : 'direct chat'}.
 RECENT CHAT HISTORY:
 ${recentHistory}
 Student's Message: "${text}"
-Reply naturally as a supportive student friend in 1-2 short, friendly, upbeat sentences.`;
+Reply naturally as a supportive student peer in 1-2 friendly, upbeat sentences.`;
 
             const reply = await ai.models.generateContent({
-              model: 'gemini-3.6-flash',
+              model: 'gemini-3.8-flash',
               contents: context,
               config: {
                 thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
@@ -2369,7 +3016,7 @@ Reply naturally as a supportive student friend in 1-2 short, friendly, upbeat se
 
         room.messages.push({
           id: 'm_' + Math.random().toString(36).substr(2, 9),
-          senderEmail: peerEmail,
+          senderEmail: chosenPeer.email,
           text: replyText,
           timestamp: new Date().toISOString(),
           reactions: {},
@@ -2629,6 +3276,7 @@ Reply naturally as a supportive student friend in 1-2 short, friendly, upbeat se
   } else {
     // Development Mode using Vite Dev Server Middleware
     console.log('Spawning Vite Dev Server Middleware on Express...');
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

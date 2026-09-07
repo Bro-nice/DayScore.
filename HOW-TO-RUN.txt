@@ -1,0 +1,60 @@
+========================================================================
+                      DAYSCORE AI - HOW TO RUN
+========================================================================
+
+Thank you for downloading DayScore AI! You can run this application on
+Windows, macOS, or Linux using any of the methods below:
+
+------------------------------------------------------------------------
+METHOD 1: WINDOWS STANDALONE EXECUTABLE (.EXE) - NO INSTALLATION REQUIRED
+------------------------------------------------------------------------
+1. On your Windows PC, locate the file:
+      DayScore-App.exe
+2. Double-click "DayScore-App.exe" to launch.
+3. A console window will appear and your default web browser will
+   automatically open to:
+      http://localhost:3000
+4. Keep the console window open while you use DayScore.
+   To close the app, simply close the console window or press Ctrl + C.
+
+------------------------------------------------------------------------
+METHOD 2: WINDOWS 1-CLICK LAUNCHER (BATCH)
+------------------------------------------------------------------------
+1. Double-click "Start-Windows.bat".
+2. It will automatically check dependencies, start the server, and open
+   your web browser to http://localhost:3000.
+
+------------------------------------------------------------------------
+METHOD 3: MACOS OR LINUX 1-CLICK LAUNCHER
+------------------------------------------------------------------------
+1. Open Terminal in this project folder.
+2. Run:
+      ./Start-Mac-Linux.sh
+3. The application will start and open your web browser automatically.
+
+------------------------------------------------------------------------
+METHOD 4: STANDARD DEVELOPER / NPM COMMANDS (ANY OS)
+------------------------------------------------------------------------
+Requirements: Node.js (v18 or newer) from https://nodejs.org
+
+1. Install dependencies:
+      npm install
+
+2. Run in development mode:
+      npm run dev
+
+3. Or build and run in production mode:
+      npm run build
+      npm start
+
+4. Open your browser and navigate to:
+      http://localhost:3000
+
+========================================================================
+GEMINI AI & OPTIONAL SETTINGS
+========================================================================
+- The application includes offline and local evaluation logic.
+- To enable live Gemini AI reflections, create a `.env` file in this folder
+  and add:
+      GEMINI_API_KEY=your_gemini_api_key_here
+========================================================================

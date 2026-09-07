@@ -32,6 +32,8 @@ import {
   Sparkles,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   Search,
   Share2,
   Check,
@@ -64,7 +66,11 @@ import {
   Info,
   Image,
   Upload,
-  Camera
+  Camera,
+  UserX,
+  ShieldAlert,
+  ShieldCheck,
+  Ban
 } from 'lucide-react';
 
 import {
@@ -95,6 +101,8 @@ import ConfettiCanvas from './components/ConfettiCanvas';
 import ContributionGraph from './components/ContributionGraph';
 import { CHARACTER_AVATARS, getFallbackAvatarSvg } from './data/avatars';
 import { SafeAvatar, AvatarFrame } from './components/SafeAvatar';
+import { InteractiveLiveBackground } from './components/InteractiveLiveBackground';
+import { WarmWelcomeGreeting } from './components/WarmWelcomeGreeting';
 
 // --- CRYPTOGRAPHIC AUTH TOKEN FETCH INTERCEPTOR ---
 const originalFetch = window.fetch.bind(window);
@@ -444,7 +452,23 @@ const AnimatedFireFlame = ({ isFrozen, size = "md" }: { isFrozen?: boolean; size
 // --- MAIN REACT COMPONENT ---
 export default function App() {
   // --- AUTH STATE ---
-  const [currentUser, setCurrentUser] = useState<Profile | null>(null);
+  const [currentUser, setCurrentUser] = useState<Profile | null>(() => {
+    try {
+      const savedEmail = localStorage.getItem('reflect_auth_email');
+      if (savedEmail) {
+        const cachedUser = localStorage.getItem(`reflect_cached_user_${savedEmail}`);
+        if (cachedUser) {
+          const parsed = JSON.parse(cachedUser);
+          if (parsed && parsed.email) {
+            return parsed;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error restoring cached user on boot:', e);
+    }
+    return null;
+  });
   const [authLoading, setAuthLoading] = useState(false);
   const [showGoogleModal, setShowGoogleModal] = useState(false);
   const [savedGoogleAccounts, setSavedGoogleAccounts] = useState<{ email: string; displayName: string; photoUrl: string }[]>(() => {
@@ -459,9 +483,12 @@ export default function App() {
   const [isEnteringNewAccount, setIsEnteringNewAccount] = useState(false);
   const [customGoogleEmail, setCustomGoogleEmail] = useState('');
   const [customGoogleName, setCustomGoogleName] = useState('');
+  const [customGoogleUsername, setCustomGoogleUsername] = useState('');
+  const [usernameCheckError, setUsernameCheckError] = useState<string | null>(null);
+  const [authFormError, setAuthFormError] = useState<string | null>(null);
 
   // --- GOOGLE ACCOUNT AUTH & PASSWORD STATE ---
-  const [selectedGoogleAccount, setSelectedGoogleAccount] = useState<{ email: string; displayName: string; photoUrl: string } | null>(null);
+  const [selectedGoogleAccount, setSelectedGoogleAccount] = useState<{ email: string; displayName: string; photoUrl: string; username?: string } | null>(null);
   const [googleAccountIsRegistered, setGoogleAccountIsRegistered] = useState<boolean | null>(null);
   const [googlePasswordInput, setGooglePasswordInput] = useState('');
   const [showGooglePasswordText, setShowGooglePasswordText] = useState(false);
@@ -512,6 +539,18 @@ export default function App() {
   const [userSearchResult, setUserSearchResult] = useState<Profile[]>([]);
   const [userSearchQuery, setUserSearchQuery] = useState('');
   
+  // --- BLOCKED USERS & PRIVACY SAFETY STATE ---
+  const [blockedUsersList, setBlockedUsersList] = useState<Profile[]>([]);
+  const [showBlockedUsersModal, setShowBlockedUsersModal] = useState(false);
+  const [confirmBlockTarget, setConfirmBlockTarget] = useState<{ email: string; displayName: string; avatarUrl?: string; frame?: any } | null>(null);
+
+  // --- GROUP CHAT STATE ---
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [showAddMembersModal, setShowAddMembersModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+  
   // --- ANALYTICS CACHE ---
   const [analyticsData, setAnalyticsData] = useState<any>(null);
 
@@ -540,6 +579,17 @@ export default function App() {
   const voiceTimerIntervalRef = useRef<any>(null);
   const speechRecognitionRef = useRef<any>(null);
   const typingIntervalRef = useRef<any>(null);
+  const isRecordingRef = useRef<boolean>(false);
+  const recordedMimeTypeRef = useRef<string>('audio/webm');
+  const voiceLiveTranscriptRef = useRef<string>('');
+  const accumulatedSpeechRef = useRef<string>('');
+  const [streakMilestoneCelebration, setStreakMilestoneCelebration] = useState<{
+    streak: number;
+    title: string;
+    description: string;
+    level: string;
+  } | null>(null);
+  const [isFlameCelebrationActive, setIsFlameCelebrationActive] = useState(false);
 
   // --- STUDY TIMER STATE (POMODORO) ---
   const [timerSeconds, setTimerSeconds] = useState(25 * 60);
@@ -1039,6 +1089,24 @@ export default function App() {
   const [newTodoText, setNewTodoText] = useState('');
   const [newTodoCategory, setNewTodoCategory] = useState('Academic');
   const [isGeneratingTodos, setIsGeneratingTodos] = useState(false);
+  const [isTodoListMinimized, setIsTodoListMinimized] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('babu_todo_minimized');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleTodoListMinimized = () => {
+    setIsTodoListMinimized(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('babu_todo_minimized', String(next));
+      } catch (e) {}
+      return next;
+    });
+  };
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
@@ -1535,13 +1603,14 @@ export default function App() {
   }, [journalText, selectedDate]);
 
   // --- API SERVICE CALLS ---
-  const handleGoogleLogin = async (email: string, displayName: string, photoUrl: string, passInput?: string) => {
+  const handleGoogleLogin = async (email: string, displayName: string, photoUrl: string, passInput?: string, explicitUsername?: string) => {
     if (!email || !email.trim()) {
       showToast('Please enter your Google account email', 'info');
       return;
     }
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = displayName.trim() || cleanEmail.split('@')[0];
+    const cleanUsername = explicitUsername ? explicitUsername.trim() : (customGoogleUsername.trim() || undefined);
     const finalPhoto = photoUrl || `https://api.dicebear.com/7.x/adventurer/svg?seed=${cleanEmail}`;
     const pwd = passInput !== undefined ? passInput : googlePasswordInput;
 
@@ -1556,11 +1625,19 @@ export default function App() {
     }
 
     setAuthLoading(true);
+    setAuthFormError(null);
     try {
       const res = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, displayName: cleanName, photoUrl: finalPhoto, password: pwd }),
+        body: JSON.stringify({
+          email: cleanEmail,
+          displayName: cleanName,
+          username: cleanUsername,
+          photoUrl: finalPhoto,
+          password: pwd,
+          isSignUp: googleAccountIsRegistered === false
+        }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -1580,11 +1657,16 @@ export default function App() {
         setIsEnteringNewAccount(false);
         setCustomGoogleEmail('');
         setCustomGoogleName('');
+        setCustomGoogleUsername('');
+        setUsernameCheckError(null);
+        setAuthFormError(null);
         setSelectedGoogleAccount(null);
         setGooglePasswordInput('');
         setGoogleAccountIsRegistered(null);
       } else {
-        showToast(data.error || 'Google Sign-In failed', 'info');
+        const errMsg = data.error || 'Google Sign-In failed';
+        setAuthFormError(errMsg);
+        showToast(errMsg, 'info');
       }
     } catch (err) {
       console.error(err);
@@ -1594,34 +1676,61 @@ export default function App() {
     }
   };
 
-  const handleSelectGoogleAccountForAuth = async (email: string, displayName: string, photoUrl: string) => {
+  const handleSelectGoogleAccountForAuth = async (email: string, displayName: string, photoUrl: string, explicitUsername?: string): Promise<boolean> => {
     if (!email || !email.trim()) {
       showToast('Please enter a valid Google email address.', 'info');
-      return;
+      return false;
     }
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = displayName.trim() || cleanEmail.split('@')[0];
+    const cleanUsername = (explicitUsername || customGoogleUsername || '').trim();
     const finalPhoto = photoUrl || `https://api.dicebear.com/7.x/adventurer/svg?seed=${cleanEmail}`;
 
-    setSelectedGoogleAccount({ email: cleanEmail, displayName: cleanName, photoUrl: finalPhoto });
     setGooglePasswordInput('');
+    setAuthFormError(null);
+    setUsernameCheckError(null);
     setAuthLoading(true);
 
     try {
       const res = await fetch('/api/auth/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail }),
+        body: JSON.stringify({
+          email: cleanEmail,
+          displayName: cleanName,
+          username: cleanUsername || undefined
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        setGoogleAccountIsRegistered(!!data.exists);
+        if (data.exists) {
+          // Account already exists with this email address
+          setGoogleAccountIsRegistered(true);
+          setSelectedGoogleAccount({ email: cleanEmail, displayName: cleanName, photoUrl: finalPhoto, username: cleanUsername });
+          return true;
+        } else {
+          // New account registration attempt - verify username uniqueness!
+          if (data.usernameExists) {
+            const reason = data.usernameReason || 'Username is already taken by another student. Please choose a unique username.';
+            setUsernameCheckError(reason);
+            setAuthFormError(reason);
+            showToast(reason, 'info');
+            return false;
+          }
+          setGoogleAccountIsRegistered(false);
+          setSelectedGoogleAccount({ email: cleanEmail, displayName: cleanName, photoUrl: finalPhoto, username: cleanUsername });
+          return true;
+        }
       } else {
         setGoogleAccountIsRegistered(false);
+        setSelectedGoogleAccount({ email: cleanEmail, displayName: cleanName, photoUrl: finalPhoto, username: cleanUsername });
+        return true;
       }
     } catch (err) {
       console.error(err);
       setGoogleAccountIsRegistered(false);
+      setSelectedGoogleAccount({ email: cleanEmail, displayName: cleanName, photoUrl: finalPhoto, username: cleanUsername });
+      return true;
     } finally {
       setAuthLoading(false);
     }
@@ -1981,6 +2090,7 @@ export default function App() {
     });
 
     fetchChatRooms(email);
+    fetchBlockedUsers(email);
     fetchFriends(email);
     searchUsers('', email);
     fetchLeaderboards(email, 'global', 'weekly');
@@ -2024,6 +2134,72 @@ export default function App() {
     fetch(`/api/social/users?search=${encodeURIComponent(query)}`, { headers: { 'x-auth-email': email } })
       .then(r => r.json())
       .then(data => setUserSearchResult(data.users || []));
+  };
+
+  const fetchBlockedUsers = (email = currentUser?.email) => {
+    if (!email) return;
+    fetch('/api/user/blocked', { headers: { 'x-auth-email': email } })
+      .then(r => r.json())
+      .then(data => {
+        setBlockedUsersList(data.blockedUsers || []);
+      })
+      .catch(err => {
+        console.error('Failed to fetch blocked users', err);
+      });
+  };
+
+  const handleBlockUser = async (targetEmail: string, targetName: string) => {
+    if (!currentUser || !targetEmail) return;
+    try {
+      const res = await fetch('/api/user/block', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-email': currentUser.email,
+        },
+        body: JSON.stringify({ targetEmail }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(`🔒 ${targetName} has been blocked`, 'info');
+        setCurrentUser(prev => prev ? { ...prev, blockedUsers: data.blockedUsers } : null);
+        fetchBlockedUsers(currentUser.email);
+        fetchChatRooms(currentUser.email);
+        setConfirmBlockTarget(null);
+        setShowPeerInfoDrawer(false);
+      } else {
+        showToast(data.error || 'Failed to block user', 'info');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error blocking user', 'info');
+    }
+  };
+
+  const handleUnblockUser = async (targetEmail: string, targetName: string) => {
+    if (!currentUser || !targetEmail) return;
+    try {
+      const res = await fetch('/api/user/unblock', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-email': currentUser.email,
+        },
+        body: JSON.stringify({ targetEmail }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(`🔓 ${targetName} has been unblocked`, 'success');
+        setCurrentUser(prev => prev ? { ...prev, blockedUsers: data.blockedUsers } : null);
+        fetchBlockedUsers(currentUser.email);
+        fetchChatRooms(currentUser.email);
+      } else {
+        showToast(data.error || 'Failed to unblock user', 'info');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error unblocking user', 'info');
+    }
   };
 
   const fetchLeaderboards = (email = currentUser?.email, scope = leaderboardScope, period = leaderboardPeriod) => {
@@ -2095,6 +2271,72 @@ export default function App() {
     }
   };
 
+  // --- TOUCH & CLICK RIPPLE WAVE EFFECT ---
+  const handleButtonRipple = (e: React.MouseEvent<HTMLElement> | React.TouchEvent<HTMLElement>) => {
+    const target = e.currentTarget;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    const circle = document.createElement('span');
+    const diameter = Math.max(rect.width, rect.height);
+    const radius = diameter / 2;
+
+    let clientX = 0;
+    let clientY = 0;
+    if ('touches' in e && e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if ('clientX' in e && typeof (e as React.MouseEvent).clientX === 'number') {
+      clientX = (e as React.MouseEvent).clientX;
+      clientY = (e as React.MouseEvent).clientY;
+    } else {
+      clientX = rect.left + rect.width / 2;
+      clientY = rect.top + rect.height / 2;
+    }
+
+    circle.style.width = circle.style.height = `${diameter}px`;
+    circle.style.left = `${clientX - rect.left - radius}px`;
+    circle.style.top = `${clientY - rect.top - radius}px`;
+    circle.classList.add('ripple-wave');
+
+    const existingWaves = target.getElementsByClassName('ripple-wave');
+    while (existingWaves.length > 2) {
+      existingWaves[0].remove();
+    }
+
+    target.appendChild(circle);
+    setTimeout(() => {
+      circle.remove();
+    }, 650);
+  };
+
+  // --- STREAK FLAME CELEBRATORY MILESTONES ---
+  const getStreakMilestoneInfo = (streakCount: number) => {
+    if (streakCount >= 100) return { title: 'Centurion of Reflection! 👑', description: '100 uninterrupted days of self-discovery and academic dedication!', level: 'Mythic' };
+    if (streakCount >= 50) return { title: 'Half-Century Inferno! ⚡', description: '50 consecutive days! You are among the top 1% disciplined scholars!', level: 'Diamond' };
+    if (streakCount >= 30) return { title: 'Monthly Grandmaster! 🌟', description: 'An entire month of daily reflection excellence. Pure mastery!', level: 'Platinum' };
+    if (streakCount >= 21) return { title: 'Habit Mastered! 🧠', description: '21 consecutive days form a permanent, unbreakable mindset!', level: 'Gold' };
+    if (streakCount >= 14) return { title: 'Fortnight Champion! 🔥', description: 'Two full weeks unbroken! Your reflection spark is blazing bright.', level: 'Silver' };
+    if (streakCount >= 7) return { title: 'Week Warrior! 🛡️', description: '7 straight days completed! A full weekly streak conquered.', level: 'Bronze' };
+    if (streakCount >= 5) return { title: 'Five-Day Flare! 🚀', description: '5 consecutive days! Strong academic momentum is building.', level: 'Rising Star' };
+    if (streakCount >= 3) return { title: 'Spark of Discipline! ✨', description: '3 days in a row! You have officially ignited the daily habit flame.', level: 'Igniter' };
+    return { title: `${streakCount} Day Reflection Streak! 🔥`, description: 'Daily reflection streak active and protected. Keep the fire burning!', level: 'Streak Holder' };
+  };
+
+  const triggerStreakCelebration = (streakCount: number) => {
+    const info = getStreakMilestoneInfo(streakCount);
+    setStreakMilestoneCelebration({
+      streak: streakCount,
+      title: info.title,
+      description: info.description,
+      level: info.level,
+    });
+    setIsFlameCelebrationActive(true);
+    setConfettiActive(true);
+    setTimeout(() => {
+      setIsFlameCelebrationActive(false);
+    }, 9000);
+  };
+
   const triggerEvaluation = async (dateToUse: string = selectedDate) => {
     if (!currentUser) return;
     if (!journalText.trim()) {
@@ -2135,6 +2377,14 @@ export default function App() {
 
         if (data.streakFrozen) {
           setStreakFrozenAlert(true);
+        }
+
+        // Glow top flame icon to signal streak progression without auto-opening modal
+        const prevStreak = currentUser?.stats?.currentStreak || 0;
+        const newStreak = data.user?.stats?.currentStreak || 0;
+        if (newStreak > 0 && newStreak > prevStreak) {
+          setIsFlameCelebrationActive(true);
+          setTimeout(() => setIsFlameCelebrationActive(false), 8000);
         }
 
         // Check if new badges unlocked
@@ -2378,9 +2628,14 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         fetchMessages(activeRoomId);
+      } else {
+        setChatMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+        showToast(data.error || 'Cannot send message', 'info');
       }
     } catch (err) {
       console.error(err);
+      setChatMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+      showToast('Error sending message', 'info');
     }
   };
 
@@ -2404,6 +2659,101 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleCreateGroupChat = async () => {
+    if (!currentUser) return;
+    if (!newGroupName.trim()) {
+      showToast('Please enter a group name', 'info');
+      return;
+    }
+    if (selectedGroupMembers.length === 0) {
+      showToast('Please select at least one classmate/friend', 'info');
+      return;
+    }
+
+    setIsCreatingGroup(true);
+    try {
+      const res = await fetch('/api/chat/rooms/group', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-email': currentUser.email,
+        },
+        body: JSON.stringify({
+          name: newGroupName.trim(),
+          participantEmails: selectedGroupMembers,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.room) {
+        showToast(`Group "${newGroupName.trim()}" created!`, 'success');
+        setShowCreateGroupModal(false);
+        setNewGroupName('');
+        setSelectedGroupMembers([]);
+        await fetchChatRooms(currentUser.email);
+        setActiveRoomId(data.room.id);
+        fetchMessages(data.room.id);
+      } else {
+        showToast(data.error || 'Failed to create group', 'info');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error creating group chat', 'info');
+    } finally {
+      setIsCreatingGroup(false);
+    }
+  };
+
+  const handleAddParticipantsToGroup = async (roomId: string, emails: string[]) => {
+    if (!currentUser || !roomId || emails.length === 0) return;
+    try {
+      const res = await fetch(`/api/chat/rooms/${roomId}/participants`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-email': currentUser.email,
+        },
+        body: JSON.stringify({ emails }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Participant(s) added to group!', 'success');
+        setShowAddMembersModal(false);
+        setSelectedGroupMembers([]);
+        await fetchChatRooms(currentUser.email);
+        fetchMessages(roomId);
+      } else {
+        showToast(data.error || 'Failed to add participants', 'info');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error adding participants', 'info');
+    }
+  };
+
+  const handleLeaveGroup = async (roomId: string) => {
+    if (!currentUser || !roomId) return;
+    try {
+      const res = await fetch(`/api/chat/rooms/${roomId}/participants/${encodeURIComponent(currentUser.email)}`, {
+        method: 'DELETE',
+        headers: {
+          'x-auth-email': currentUser.email,
+        },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('You left the group', 'info');
+        setActiveRoomId(null);
+        setShowPeerInfoDrawer(false);
+        fetchChatRooms(currentUser.email);
+      } else {
+        showToast(data.error || 'Failed to leave group', 'info');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error leaving group', 'info');
     }
   };
 
@@ -2452,84 +2802,149 @@ export default function App() {
     }
   };
 
-  // --- VOICE TYPING PIPELINE: 1. RECORD -> 2. ANALYZE -> 3. FAST TYPE ---
+  // --- VOICE TYPING PIPELINE: ENHANCED REAL-TIME ACCURACY + AI REFINEMENT ---
+  const formatSpokenText = (raw: string): string => {
+    if (!raw) return '';
+    let formatted = raw
+      // Spoken punctuation commands
+      .replace(/\b(full stop|period)\b/gi, '.')
+      .replace(/\bcomma\b/gi, ',')
+      .replace(/\bquestion mark\b/gi, '?')
+      .replace(/\bexclamation mark\b/gi, '!')
+      .replace(/\b(new line|newline)\b/gi, '\n')
+      .replace(/\b(new paragraph|paragraph)\b/gi, '\n\n')
+      // Remove spaces before punctuation
+      .replace(/\s+([.,?!:;])/g, '$1')
+      // Ensure space after punctuation if followed by letters or digits
+      .replace(/([.,?!:;])([a-zA-Z0-9])/g, '$1 $2')
+      // Clean up multiple spaces
+      .replace(/[ \t]+/g, ' ');
+
+    // Auto-capitalize first letter and after sentence delimiters
+    formatted = formatted.replace(/(^|[.?!]\s+|\n+)([a-z])/g, (_, p1, p2) => p1 + p2.toUpperCase());
+    return formatted.trim();
+  };
+
   const startVoiceRecording = async () => {
     setVoiceLiveTranscript('');
+    voiceLiveTranscriptRef.current = '';
+    accumulatedSpeechRef.current = '';
     setVoiceSeconds(0);
     audioChunksRef.current = [];
+    isRecordingRef.current = true;
 
     if (voiceTimerIntervalRef.current) clearInterval(voiceTimerIntervalRef.current);
     if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      let mimeType = 'audio/webm';
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        mimeType = 'audio/webm;codecs=opus';
-      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
-        mimeType = 'audio/ogg;codecs=opus';
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        mimeType = 'audio/mp4';
-      }
+    voiceTimerIntervalRef.current = setInterval(() => {
+      setVoiceSeconds(prev => prev + 1);
+    }, 1000);
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
+    const isMobile = /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
+    let speechActive = false;
 
-      mediaRecorder.start(250);
+    // 1. Mobile & Web Speech Recognition Setup
+    if (SpeechRecognition) {
+      try {
+        const recognition = new SpeechRecognition();
+        // On mobile WebKit/Android, continuous = true triggers immediate silence aborts; use false with auto-restart on onend
+        recognition.continuous = !isMobile;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+        recognition.lang = navigator.language || 'en-US';
 
-      voiceTimerIntervalRef.current = setInterval(() => {
-        setVoiceSeconds(prev => prev + 1);
-      }, 1000);
-
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        try {
-          const recognition = new SpeechRecognition();
-          recognition.continuous = true;
-          recognition.interimResults = true;
-          recognition.lang = 'en-US';
-
-          recognition.onresult = (event: any) => {
-            let currentStr = '';
-            for (let i = 0; i < event.results.length; ++i) {
-              currentStr += event.results[i][0].transcript;
+        recognition.onresult = (event: any) => {
+          let sessionFinal = '';
+          let sessionInterim = '';
+          const startIndex = typeof event.resultIndex === 'number' ? event.resultIndex : 0;
+          for (let i = startIndex; i < event.results.length; ++i) {
+            const chunkText = event.results[i][0]?.transcript || '';
+            if (event.results[i].isFinal) {
+              sessionFinal += (sessionFinal ? ' ' : '') + chunkText.trim();
+            } else {
+              sessionInterim += (sessionInterim ? ' ' : '') + chunkText.trim();
             }
-            if (currentStr.trim()) {
-              setVoiceLiveTranscript(currentStr.trim());
+          }
+          if (sessionFinal) {
+            accumulatedSpeechRef.current = (accumulatedSpeechRef.current ? accumulatedSpeechRef.current + ' ' : '') + sessionFinal;
+          }
+          const fullSpoken = (accumulatedSpeechRef.current + (sessionInterim ? ' ' + sessionInterim : '')).trim();
+          if (fullSpoken) {
+            voiceLiveTranscriptRef.current = fullSpoken;
+            setVoiceLiveTranscript(fullSpoken);
+          }
+        };
+
+        recognition.onerror = (e: any) => {
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            showToast('🎙️ Microphone access blocked. Please enable mic in browser/system settings.', 'info');
+          } else if (e.error !== 'no-speech') {
+            console.warn('Speech recognition warning:', e.error);
+          }
+        };
+
+        recognition.onend = () => {
+          if (isRecordingRef.current) {
+            try {
+              recognition.start();
+            } catch (e) {}
+          }
+        };
+
+        speechRecognitionRef.current = recognition;
+        recognition.start();
+        speechActive = true;
+        setVoiceStatus('recording');
+        showToast(isMobile ? '🎙️ Mobile voice typing active! Speak into your mic...' : '🎙️ Voice dictation active! Speak clearly...', 'info');
+      } catch (e) {
+        console.warn('Speech recognition init error:', e);
+      }
+    }
+
+    // 2. High-precision audio capture for desktop or if Web Speech not supported
+    // Mobile browsers lock mic hardware exclusively; avoid running getUserMedia in parallel with SpeechRecognition on mobile
+    if (!isMobile || !speechActive) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        let mimeType = 'audio/webm';
+        if (typeof MediaRecorder !== 'undefined') {
+          if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+            mimeType = 'audio/webm;codecs=opus';
+          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+            mimeType = 'audio/mp4';
+          }
+          recordedMimeTypeRef.current = mimeType;
+          const mediaRecorder = new MediaRecorder(stream, { mimeType });
+          mediaRecorderRef.current = mediaRecorder;
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              audioChunksRef.current.push(event.data);
             }
           };
-
-          speechRecognitionRef.current = recognition;
-          recognition.start();
-        } catch (e) {
-          console.warn('Speech recognition interim warning:', e);
+          mediaRecorder.start(250);
+          setVoiceStatus('recording');
+        }
+      } catch (err: any) {
+        if (!speechActive) {
+          console.warn('Microphone hardware error, falling back to simulated typing:', err);
+          startFallbackSpeechRecognition();
         }
       }
-
-      setVoiceStatus('recording');
-      showToast('🎙️ Voice recording active! Speak clearly...', 'info');
-
-    } catch (err: any) {
-      console.warn('Microphone stream error, starting fallback speech dictation:', err);
-      startFallbackSpeechRecognition();
     }
   };
 
   const startFallbackSpeechRecognition = () => {
+    isRecordingRef.current = true;
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
       try {
         const recognition = new SpeechRecognition();
-        recognition.continuous = true;
+        recognition.continuous = false;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.maxAlternatives = 1;
+        recognition.lang = navigator.language || 'en-US';
 
         setVoiceStatus('recording');
         setVoiceSeconds(0);
@@ -2538,9 +2953,17 @@ export default function App() {
         recognition.onresult = (event: any) => {
           let str = '';
           for (let i = 0; i < event.results.length; ++i) {
-            str += event.results[i][0].transcript;
+            str += (str ? ' ' : '') + event.results[i][0].transcript.trim();
           }
-          setVoiceLiveTranscript(str.trim());
+          const fullText = str.trim();
+          voiceLiveTranscriptRef.current = fullText;
+          setVoiceLiveTranscript(fullText);
+        };
+
+        recognition.onend = () => {
+          if (isRecordingRef.current) {
+            try { recognition.start(); } catch (e) {}
+          }
         };
 
         speechRecognitionRef.current = recognition;
@@ -2555,6 +2978,7 @@ export default function App() {
   };
 
   const stopAndAnalyzeVoice = async () => {
+    isRecordingRef.current = false;
     if (voiceTimerIntervalRef.current) {
       clearInterval(voiceTimerIntervalRef.current);
       voiceTimerIntervalRef.current = null;
@@ -2564,6 +2988,7 @@ export default function App() {
       try { speechRecognitionRef.current.stop(); } catch (e) {}
     }
 
+    const recordedChunks = [...audioChunksRef.current];
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
         mediaRecorderRef.current.stop();
@@ -2573,17 +2998,65 @@ export default function App() {
       } catch (e) {}
     }
 
-    setVoiceStatus('idle');
+    const rawTranscript = (voiceLiveTranscriptRef.current || accumulatedSpeechRef.current || voiceLiveTranscript).trim();
+    const formattedTranscript = formatSpokenText(rawTranscript);
 
-    const spokenText = voiceLiveTranscript.trim();
-    if (spokenText) {
+    // 1. Instant insertion with zero lag
+    if (formattedTranscript) {
       setJournalText(prev => {
         const existing = prev.trim();
-        return existing ? `${existing}\n\n${spokenText}` : spokenText;
+        return existing ? `${existing}\n\n${formattedTranscript}` : formattedTranscript;
       });
-      showToast('🎙️ Voice recorded exactly as spoken!', 'success');
+      showToast('🎙️ Voice recorded with smart formatting!', 'success');
     } else {
-      showToast('No speech detected. Please speak into your microphone.', 'info');
+      showToast('No speech detected. Speak closer to your microphone and try again.', 'info');
+    }
+
+    setVoiceStatus('idle');
+
+    // 2. High-precision AI audio transcription refinement in background
+    if (recordedChunks.length > 0 && currentUser?.email) {
+      const mime = recordedMimeTypeRef.current || 'audio/webm';
+      const audioBlob = new Blob(recordedChunks, { type: mime });
+      if (audioBlob.size > 2000) {
+        setVoiceStatus('analyzing');
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            const base64Audio = reader.result as string;
+            const res = await fetch('/api/voice/transcribe', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-auth-email': currentUser.email,
+              },
+              body: JSON.stringify({
+                audioData: base64Audio,
+                mimeType: mime,
+              }),
+            });
+            const data = await res.json();
+            if (data.success && data.transcript && data.transcript.trim()) {
+              const aiCleanText = data.transcript.trim();
+              setJournalText(prev => {
+                if (formattedTranscript && prev.includes(formattedTranscript)) {
+                  return prev.replace(formattedTranscript, aiCleanText);
+                } else if (!formattedTranscript) {
+                  const existing = prev.trim();
+                  return existing ? `${existing}\n\n${aiCleanText}` : aiCleanText;
+                }
+                return prev;
+              });
+              showToast('✨ Voice transcription perfected with AI precision!', 'success');
+            }
+          } catch (err) {
+            console.warn('AI transcription refinement:', err);
+          } finally {
+            setVoiceStatus('idle');
+          }
+        };
+        reader.readAsDataURL(audioBlob);
+      }
     }
   };
 
@@ -2611,22 +3084,32 @@ export default function App() {
   };
 
   const cancelOrSkipVoice = () => {
+    isRecordingRef.current = false;
     if (voiceTimerIntervalRef.current) clearInterval(voiceTimerIntervalRef.current);
     if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch (e) {}
+      try {
+        mediaRecorderRef.current.stop();
+        if (mediaRecorderRef.current.stream) {
+          mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
+      } catch (e) {}
     }
     if (speechRecognitionRef.current) {
       try { speechRecognitionRef.current.stop(); } catch (e) {}
     }
     setVoiceStatus('idle');
+    setVoiceLiveTranscript('');
+    voiceLiveTranscriptRef.current = '';
   };
 
   const runSimulatedVoiceTyping = () => {
+    isRecordingRef.current = true;
     setVoiceStatus('recording');
     setVoiceSeconds(0);
     voiceTimerIntervalRef.current = setInterval(() => setVoiceSeconds(s => s + 1), 1000);
     setVoiceLiveTranscript("");
+    voiceLiveTranscriptRef.current = "";
   };
 
   // --- UTILS & LOOKUPS ---
@@ -2677,8 +3160,10 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 px-4 transition-colors relative">
-        <div className="w-full max-w-md text-center">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 px-4 transition-colors relative overflow-hidden">
+        {/* Interactive Live Background */}
+        <InteractiveLiveBackground isDark={isThemeDark} />
+        <div className="w-full max-w-md text-center relative z-10">
           <div className="mx-auto mb-6 flex justify-center">
             <AnimatedLogo size="lg" />
           </div>
@@ -2764,7 +3249,7 @@ export default function App() {
                     </button>
                   </div>
                 ) : (
-                  /* Form to enter Google Email & Name */
+                  /* Form to enter Google Email, Name & Username */
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -2781,6 +3266,13 @@ export default function App() {
                       Enter your Google account details to proceed:
                     </p>
 
+                    {(usernameCheckError || authFormError) && (
+                      <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/80 rounded-xl text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+                        <span>{usernameCheckError || authFormError}</span>
+                      </div>
+                    )}
+
                     <div className="space-y-1">
                       <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Google Email Address</label>
                       <div className="relative">
@@ -2792,10 +3284,17 @@ export default function App() {
                           onChange={(e) => {
                             const val = e.target.value;
                             setCustomGoogleEmail(val);
-                            if (!customGoogleName && val.includes('@')) {
+                            setUsernameCheckError(null);
+                            setAuthFormError(null);
+                            if (val.includes('@')) {
                               const prefix = val.split('@')[0];
-                              const formatted = prefix.replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                              setCustomGoogleName(formatted);
+                              if (!customGoogleName) {
+                                const formatted = prefix.replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                setCustomGoogleName(formatted);
+                              }
+                              if (!customGoogleUsername) {
+                                setCustomGoogleUsername(prefix.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+                              }
                             }
                           }}
                           placeholder="e.g. yourname@gmail.com"
@@ -2809,17 +3308,55 @@ export default function App() {
                       <input
                         type="text"
                         value={customGoogleName}
-                        onChange={(e) => setCustomGoogleName(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCustomGoogleName(val);
+                          setUsernameCheckError(null);
+                          setAuthFormError(null);
+                          if (!customGoogleUsername && val.trim()) {
+                            setCustomGoogleUsername(val.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+                          }
+                        }}
                         placeholder="e.g. Alex Smith"
                         className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
                       />
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Unique Username (@handle)</label>
+                        <span className="text-[9px] font-bold text-slate-400">Unique identifier</span>
+                      </div>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">@</span>
+                        <input
+                          type="text"
+                          value={customGoogleUsername}
+                          onChange={(e) => {
+                            setCustomGoogleUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+                            setUsernameCheckError(null);
+                            setAuthFormError(null);
+                          }}
+                          placeholder="e.g. alex_smith"
+                          className="w-full pl-8 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/30 rounded-xl flex items-center gap-2 text-[10px] font-medium text-indigo-700 dark:text-indigo-300">
+                      <Shield className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                      <span>Strict 1 Account Rule: One account per email address & unique username.</span>
                     </div>
 
                     <div className="flex gap-2 pt-1">
                       {savedGoogleAccounts.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => setIsEnteringNewAccount(false)}
+                          onClick={() => {
+                            setIsEnteringNewAccount(false);
+                            setUsernameCheckError(null);
+                            setAuthFormError(null);
+                          }}
                           className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl cursor-pointer"
                         >
                           Back
@@ -2845,6 +3382,13 @@ export default function App() {
                 }}
                 className="space-y-4"
               >
+                {authFormError && (
+                  <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/80 rounded-xl text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+                    <span>{authFormError}</span>
+                  </div>
+                )}
+
                 {/* Account card summary header */}
                 <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700">
                   <div className="flex items-center gap-3 min-w-0">
@@ -3056,6 +3600,13 @@ export default function App() {
                           Enter your Google account details to sign in to BaBU:
                         </p>
 
+                        {(usernameCheckError || authFormError) && (
+                          <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/80 rounded-xl text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-start gap-2">
+                            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+                            <span>{usernameCheckError || authFormError}</span>
+                          </div>
+                        )}
+
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-display">
                             Google Email Address
@@ -3067,10 +3618,17 @@ export default function App() {
                             onChange={(e) => {
                               const val = e.target.value;
                               setCustomGoogleEmail(val);
-                              if (!customGoogleName && val.includes('@')) {
+                              setUsernameCheckError(null);
+                              setAuthFormError(null);
+                              if (val.includes('@')) {
                                 const prefix = val.split('@')[0];
-                                const formatted = prefix.replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                                setCustomGoogleName(formatted);
+                                if (!customGoogleName) {
+                                  const formatted = prefix.replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                  setCustomGoogleName(formatted);
+                                }
+                                if (!customGoogleUsername) {
+                                  setCustomGoogleUsername(prefix.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+                                }
                               }
                             }}
                             placeholder="e.g. yourname@gmail.com"
@@ -3085,17 +3643,57 @@ export default function App() {
                           <input
                             type="text"
                             value={customGoogleName}
-                            onChange={(e) => setCustomGoogleName(e.target.value)}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCustomGoogleName(val);
+                              setUsernameCheckError(null);
+                              setAuthFormError(null);
+                              if (!customGoogleUsername && val.trim()) {
+                                setCustomGoogleUsername(val.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+                              }
+                            }}
                             placeholder="e.g. Alex Smith"
                             className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
                           />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-display">
+                              Unique Username (@handle)
+                            </label>
+                            <span className="text-[9px] font-bold text-slate-400">Unique identifier</span>
+                          </div>
+                          <div className="relative">
+                            <span className="absolute left-3.5 top-3 text-xs font-bold text-slate-400">@</span>
+                            <input
+                              type="text"
+                              value={customGoogleUsername}
+                              onChange={(e) => {
+                                setCustomGoogleUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+                                setUsernameCheckError(null);
+                                setAuthFormError(null);
+                              }}
+                              placeholder="e.g. alex_smith"
+                              className="w-full pl-8 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/30 rounded-xl flex items-center gap-2 text-[10px] font-medium text-indigo-700 dark:text-indigo-300">
+                          <Shield className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          <span>Strict 1 Account Rule: One account per email address & unique username.</span>
                         </div>
 
                         <div className="flex gap-2.5 pt-2">
                           {savedGoogleAccounts.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => setIsEnteringNewAccount(false)}
+                              onClick={() => {
+                                setIsEnteringNewAccount(false);
+                                setUsernameCheckError(null);
+                                setAuthFormError(null);
+                              }}
                               className="px-4 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-2xl transition-all cursor-pointer"
                             >
                               Back
@@ -3124,6 +3722,12 @@ export default function App() {
                       }}
                       className="space-y-4"
                     >
+                      {authFormError && (
+                        <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/80 rounded-xl text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+                          <span>{authFormError}</span>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700">
                         <div className="flex items-center gap-3 min-w-0">
                           <img
@@ -3250,6 +3854,12 @@ export default function App() {
   return (
     <div className="flex h-screen bg-gradient-to-tr from-[#f5f3ff] via-[#faf5ff] to-[#fff1f2] dark:bg-gradient-to-tr dark:from-[#090514] dark:via-[#02010a] dark:to-[#0f0410] text-slate-900 dark:text-white transition-colors overflow-hidden font-sans relative">
 
+      {/* Interactive Live Background (Google Studio / Labs Dots & Spikes with cursor-follow & click/touch ripple physics) */}
+      <InteractiveLiveBackground isDark={isThemeDark} />
+
+      {/* Warm Loving Creative Welcome Greeting */}
+      <WarmWelcomeGreeting displayName={currentUser?.displayName} email={currentUser?.email} />
+
       {/* Vibrant Ambient Orbs */}
       <div className="absolute top-[-10%] left-[-5%] w-[45%] h-[45%] bg-gradient-to-br from-violet-400/20 to-fuchsia-400/10 rounded-full blur-[100px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-5%] w-[45%] h-[45%] bg-gradient-to-br from-rose-400/20 to-amber-400/10 rounded-full blur-[100px] pointer-events-none" />
@@ -3295,25 +3905,47 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 px-2.5 py-1 rounded-full text-xs font-black text-amber-600 dark:text-amber-400">
-            <span>🔥</span>
-            <span>{currentUser.stats.currentStreak}d</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => triggerStreakCelebration(currentUser?.stats?.currentStreak || 1)}
+            title="Reflection Streak - Tap to celebrate milestone!"
+            className={`flex items-center gap-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 px-2.5 py-1 rounded-full text-xs font-black text-amber-600 dark:text-amber-400 cursor-pointer hover:scale-105 active:scale-95 transition-all shadow-xs ${
+              isFlameCelebrationActive ? 'flame-celebration-glow ring-2 ring-orange-400 scale-105' : ''
+            }`}
+          >
+            <span className={`text-sm ${isFlameCelebrationActive ? 'animate-bounce' : ''}`}>🔥</span>
+            <span>{currentUser?.stats?.currentStreak || 0}d</span>
+          </button>
         </div>
       </div>
 
       {/* --- SIDEBAR LAYOUT --- */}
       <aside className="w-64 bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border-r border-slate-200/50 dark:border-slate-800/50 flex flex-col justify-between flex-shrink-0 select-none hidden md:flex relative z-10">
         <div className="p-6 space-y-6">
-          <div className="flex items-center gap-2.5">
-            <AnimatedLogo size="sm" />
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h2 className="font-black tracking-tight text-slate-900 dark:text-white font-display text-base leading-none">BaBU</h2>
-                <span className="text-[9px] bg-fuchsia-100 dark:bg-fuchsia-950/60 text-fuchsia-600 dark:text-fuchsia-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Student Hub</span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <AnimatedLogo size="sm" />
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <h2 className="font-black tracking-tight text-slate-900 dark:text-white font-display text-base leading-none">BaBU</h2>
+                  <span className="text-[9px] bg-fuchsia-100 dark:bg-fuchsia-950/60 text-fuchsia-600 dark:text-fuchsia-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Student Hub</span>
+                </div>
+                <span className="text-[8px] font-mono font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-violet-600 via-fuchsia-500 to-rose-500 uppercase block mt-0.5">BY - AAROGYA PARAJULI</span>
               </div>
-              <span className="text-[8px] font-mono font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-violet-600 via-fuchsia-500 to-rose-500 uppercase block mt-0.5">BY - AAROGYA PARAJULI</span>
             </div>
+
+            {/* Desktop Top Streak Count Button */}
+            <button
+              type="button"
+              onClick={() => triggerStreakCelebration(currentUser?.stats?.currentStreak || 1)}
+              title="Reflection Streak - Tap to celebrate milestone!"
+              className={`flex items-center gap-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 px-2.5 py-1 rounded-full text-xs font-black text-amber-600 dark:text-amber-400 cursor-pointer hover:scale-105 active:scale-95 transition-all shadow-xs flex-shrink-0 ${
+                isFlameCelebrationActive ? 'flame-celebration-glow ring-2 ring-orange-400 scale-105' : ''
+              }`}
+            >
+              <span className={`text-sm ${isFlameCelebrationActive ? 'animate-bounce' : ''}`}>🔥</span>
+              <span>{currentUser?.stats?.currentStreak || 0}d</span>
+            </button>
           </div>
 
           <nav className="space-y-1.5">
@@ -3329,6 +3961,9 @@ export default function App() {
             ].map(item => (
               <button
                 key={item.id}
+                data-nav-button="true"
+                data-ripple="true"
+                onPointerDown={handleButtonRipple}
                 onClick={() => {
                   if (item.id === 'chat') {
                     setActiveRoomId(null);
@@ -3337,7 +3972,7 @@ export default function App() {
                   if (item.id === 'analytics') fetchAnalytics();
                   if (item.id === 'leaderboard') fetchLeaderboards(currentUser?.email, leaderboardScope, leaderboardPeriod);
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition-all duration-300 ${
+                className={`ripple-parent relative overflow-hidden select-none w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition-all duration-300 cursor-pointer ${
                   currentTab === item.id
                     ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-md shadow-violet-200/50 dark:shadow-none translate-x-1'
                     : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100/80 dark:hover:bg-slate-800/80 hover:translate-x-0.5'
@@ -3366,7 +4001,8 @@ export default function App() {
           </div>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-2 text-slate-400 hover:text-rose-500 py-2 px-2 text-xs font-bold transition-colors rounded-lg"
+            onPointerDown={handleButtonRipple}
+            className="ripple-parent relative overflow-hidden select-none w-full flex items-center gap-2 text-slate-400 hover:text-rose-500 py-2 px-2 text-xs font-bold transition-colors rounded-lg cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
             Logout Account
@@ -3374,9 +4010,9 @@ export default function App() {
         </div>
       </aside>
 
-      {/* --- MOBILE NAVBAR --- */}
+      {/* --- MOBILE NAVBAR ("DOWN BUTTONS") WITH RIPPLE EFFECT --- */}
       <div 
-        className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800 grid grid-cols-6 gap-0.5 z-30 py-2 px-1"
+        className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800 grid grid-cols-7 gap-0.5 z-30 py-2 px-1"
       >
         {[
           { id: 'home', label: 'Home', icon: <BookOpen className="w-4 h-4" /> },
@@ -3385,10 +4021,14 @@ export default function App() {
           { id: 'social', label: 'Feed', icon: <Users className="w-4 h-4" /> },
           { id: 'chat', label: 'Chat', icon: <MessageSquare className="w-4 h-4" /> },
           { id: 'profile', label: 'Profile', icon: <User className="w-4 h-4" /> },
+          { id: 'settings', label: 'Setting', icon: <SettingsIcon className="w-4 h-4" /> },
         ].map((item) => (
           <div
             key={item.id}
             role="button"
+            data-nav-button="true"
+            data-ripple="true"
+            onPointerDown={handleButtonRipple}
             onClick={() => {
               if (item.id === 'chat') {
                 setActiveRoomId(null);
@@ -3396,8 +4036,8 @@ export default function App() {
               setCurrentTab(item.id as any);
               if (item.id === 'leaderboard') fetchLeaderboards(currentUser.email, leaderboardScope, leaderboardPeriod);
             }}
-            className={`flex flex-col items-center justify-center gap-0.5 text-[9px] font-bold cursor-pointer transition-colors py-1 ${
-              currentTab === item.id ? 'text-violet-600 dark:text-violet-400 font-extrabold' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+            className={`ripple-parent relative overflow-hidden select-none rounded-xl flex flex-col items-center justify-center gap-0.5 text-[9px] font-bold cursor-pointer transition-all py-1.5 active:scale-95 ${
+              currentTab === item.id ? 'text-violet-600 dark:text-violet-400 font-extrabold bg-violet-50/70 dark:bg-violet-950/50' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
             }`}
           >
             {item.icon}
@@ -3466,8 +4106,6 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
-
-
 
             {/* Core Action Layout */}
             <div className="space-y-6">
@@ -3583,6 +4221,63 @@ export default function App() {
                       {saveStatus === 'error' && <span className="text-rose-500 text-[11px] font-semibold">Autosave failed</span>}
                     </div>
                   </div>
+
+                  {/* Live Voice Typing Feedback Banner */}
+                  {voiceStatus === 'recording' && (
+                    <div className="mb-3 p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 rounded-2xl flex flex-col gap-2 transition-all">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="relative flex h-3 w-3">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+                          </span>
+                          <span className="text-xs font-bold text-rose-700 dark:text-rose-300 uppercase tracking-wider">
+                            Listening ({Math.floor(voiceSeconds / 60)}:{(voiceSeconds % 60).toString().padStart(2, '0')})
+                          </span>
+                          <div className="flex items-center gap-0.5 ml-1">
+                            <span className="w-1 h-3 bg-rose-500 rounded-full animate-pulse" />
+                            <span className="w-1 h-5 bg-rose-500 rounded-full animate-pulse [animation-delay:150ms]" />
+                            <span className="w-1 h-2 bg-rose-500 rounded-full animate-pulse [animation-delay:300ms]" />
+                            <span className="w-1 h-4 bg-rose-500 rounded-full animate-pulse [animation-delay:75ms]" />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={cancelOrSkipVoice}
+                            className="px-2.5 py-1 text-xs font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-300 transition-colors cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopAndAnalyzeVoice}
+                            className="px-3 py-1 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+                          >
+                            Done Recording
+                          </button>
+                        </div>
+                      </div>
+                      {voiceLiveTranscript && (
+                        <div className="text-xs text-slate-700 dark:text-slate-200 italic bg-white/70 dark:bg-slate-900/60 p-2 rounded-xl border border-rose-100 dark:border-rose-900/40">
+                          "{voiceLiveTranscript}"
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* AI Refinement Status Banner */}
+                  {voiceStatus === 'analyzing' && (
+                    <div className="mb-3 p-2.5 bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-800/60 rounded-2xl flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3.5 h-3.5 border-2 border-violet-600 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-xs font-semibold text-violet-700 dark:text-violet-300">
+                          Perfecting voice transcription with AI precision...
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-black text-violet-600 dark:text-violet-400 uppercase tracking-wider bg-violet-100 dark:bg-violet-900/50 px-2 py-0.5 rounded-full">Fast AI</span>
+                    </div>
+                  )}
 
                   <div className="relative">
                     <textarea
@@ -3826,175 +4521,230 @@ export default function App() {
                 </div>
               </div>
 
-              {/* TO DO LIST & USER INPUT */}
-              <div className="lg:col-span-2 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-6 rounded-[32px] border border-violet-100/50 dark:border-slate-800/80 shadow-md space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white font-display flex items-center gap-2">
-                      <CheckCircle2 className="w-5 h-5 text-violet-500" />
-                      TO DO LIST
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-0.5">Manage tasks manually or auto-generate actionable goals with DayScore AI</p>
-                  </div>
+              {/* TO DO LIST & USER INPUT (MINIMIZABLE & EXPANDABLE) */}
+              <div className="lg:col-span-2">
+                {isTodoListMinimized ? (
+                  <div
+                    onClick={toggleTodoListMinimized}
+                    className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-5 rounded-[28px] border border-violet-100/50 dark:border-slate-800/80 shadow-md hover:shadow-lg hover:border-violet-300 dark:hover:border-violet-700/60 transition-all cursor-pointer select-none group"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className="w-10 h-10 rounded-2xl bg-violet-100 dark:bg-violet-950/60 flex items-center justify-center text-violet-600 dark:text-violet-400 group-hover:scale-105 transition-transform flex-shrink-0">
+                          <CheckCircle2 className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-black text-slate-900 dark:text-white font-display uppercase tracking-tight">
+                              TO DO LIST
+                            </h3>
+                            <span className="px-2.5 py-0.5 bg-violet-500/10 dark:bg-violet-950/40 text-violet-600 dark:text-violet-300 border border-violet-200 dark:border-violet-800/80 rounded-full text-[10px] font-black">
+                              {todos.filter(t => t.completed).length} / {todos.length} Done
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            {todos.length === 0
+                              ? 'No tasks yet · Tap to expand and create'
+                              : `${todos.filter(t => !t.completed).length} pending tasks · Tap to expand To Do list`}
+                          </p>
+                        </div>
+                      </div>
 
-                  <div className="flex items-center gap-2">
-                    <span className="px-3 py-1 bg-violet-500/10 dark:bg-violet-950/40 text-violet-600 dark:text-violet-300 border border-violet-200 dark:border-violet-800/80 rounded-full text-xs font-black">
-                      {todos.filter(t => t.completed).length} / {todos.length} Done
-                    </span>
-                    {todos.some(t => t.completed) && (
-                      <button
-                        type="button"
-                        onClick={handleClearCompletedTodos}
-                        className="px-2.5 py-1 text-[11px] font-extrabold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
-                        title="Clear finished tasks"
-                      >
-                        Clear Done
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Primary User Task Entry Form */}
-                <form onSubmit={handleAddTodo} className="space-y-3 bg-slate-50/80 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-start gap-2.5">
-                    <textarea
-                      rows={2}
-                      value={newTodoText}
-                      onChange={e => setNewTodoText(e.target.value)}
-                      placeholder="Write your task or detailed multi-step plan here (long tasks supported)..."
-                      className="flex-1 w-full px-4 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 text-xs focus:outline-none focus:border-violet-500 text-slate-800 dark:text-white font-medium shadow-sm resize-y min-h-[44px]"
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleAddTodo(e);
-                        }
-                      }}
-                    />
-
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
-                      {/* Add Button */}
-                      <button
-                        type="submit"
-                        className="flex-1 sm:flex-none px-4 py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-black rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer flex-shrink-0"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>Add</span>
-                      </button>
-
-                      {/* AI Task Generator Button - Responsive & Perfectly Fitted */}
-                      <button
-                        type="button"
-                        onClick={handleGenerateAiTodos}
-                        disabled={isGeneratingTodos}
-                        className="flex-1 sm:flex-none px-3.5 py-2.5 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-rose-500 hover:from-violet-500 hover:to-rose-400 text-white font-black rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md hover:shadow-lg active:scale-95 disabled:opacity-50 transition-all cursor-pointer flex-shrink-0"
-                        title="AI Auto-Generate Tasks from Journal"
-                      >
-                        <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
-                        <span className="whitespace-nowrap">✨ AI Auto-Task</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Category Selection Pills (Academic, Health, Focus, Habit) */}
-                  <div className="flex items-center gap-2 pt-1 overflow-x-auto pb-1 no-scrollbar">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1 flex-shrink-0">Category:</span>
-                    {[
-                      { id: 'Academic', label: 'Academic 📚', color: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' },
-                      { id: 'Health', label: 'Health 🏃‍♂️', color: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' },
-                      { id: 'Focus', label: 'Focus 🧠', color: 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800' },
-                      { id: 'Habit', label: 'Habit ✨', color: 'bg-fuchsia-50 dark:bg-fuchsia-950/60 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-200 dark:border-fuchsia-800' },
-                    ].map(cat => (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => setNewTodoCategory(cat.id)}
-                        className={`px-3 py-1 rounded-full text-xs font-bold border transition-all cursor-pointer flex-shrink-0 ${
-                          newTodoCategory === cat.id
-                            ? `${cat.color} ring-2 ring-violet-400 ring-offset-1 font-extrabold shadow-sm`
-                            : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-violet-300'
-                        }`}
-                      >
-                        {cat.label}
-                      </button>
-                    ))}
-                  </div>
-                </form>
-
-                {/* Aesthetic Todo Items List */}
-                <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                  {todos.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400 text-xs bg-slate-50/50 dark:bg-slate-800/30 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
-                      <p className="font-medium text-slate-500 dark:text-slate-400">No tasks added yet!</p>
-                      <p className="text-[10px] text-slate-400 mt-1">Type your goal above and click Add, or tap ✨ AI Auto-Task button.</p>
-                    </div>
-                  ) : (
-                    todos.map(todo => {
-                      const getCategoryBadgeClass = (category: string) => {
-                        switch (category) {
-                          case 'Academic':
-                            return 'bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800';
-                          case 'Health':
-                            return 'bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
-                          case 'Focus':
-                            return 'bg-amber-100/80 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800';
-                          case 'Habit':
-                            return 'bg-fuchsia-100/80 dark:bg-fuchsia-950/80 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-200 dark:border-fuchsia-800';
-                          default:
-                            return 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600';
-                        }
-                      };
-
-                      return (
-                        <div
-                          key={todo.id}
-                          className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 group ${
-                            todo.completed
-                              ? 'bg-slate-50/60 dark:bg-slate-800/30 border-slate-200/50 dark:border-slate-800/50 text-slate-400 opacity-75 line-through'
-                              : 'bg-white dark:bg-slate-800/90 border-slate-200/80 dark:border-slate-700/80 text-slate-800 dark:text-white shadow-sm hover:shadow-md hover:border-violet-300/80'
-                          }`}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleTodoListMinimized();
+                          }}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-violet-50 dark:bg-violet-950/60 hover:bg-violet-100 dark:hover:bg-violet-900/60 text-violet-600 dark:text-violet-300 border border-violet-200/80 dark:border-violet-800/80 text-xs font-black shadow-2xs group-hover:border-violet-400 transition-all cursor-pointer"
                         >
-                          <div className="flex items-start gap-3 flex-1 min-w-0">
-                            <button
-                              onClick={() => handleToggleTodo(todo.id)}
-                              className={`w-5 h-5 rounded-lg flex items-center justify-center border transition-all cursor-pointer flex-shrink-0 mt-0.5 ${
+                          <span>Expand</span>
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-6 rounded-[32px] border border-violet-100/50 dark:border-slate-800/80 shadow-md space-y-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-base font-black text-slate-900 dark:text-white font-display flex items-center gap-2">
+                          <CheckCircle2 className="w-5 h-5 text-violet-500" />
+                          TO DO LIST
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-0.5">Manage tasks manually or auto-generate actionable goals with DayScore AI</p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-violet-500/10 dark:bg-violet-950/40 text-violet-600 dark:text-violet-300 border border-violet-200 dark:border-violet-800/80 rounded-full text-xs font-black">
+                          {todos.filter(t => t.completed).length} / {todos.length} Done
+                        </span>
+                        {todos.some(t => t.completed) && (
+                          <button
+                            type="button"
+                            onClick={handleClearCompletedTodos}
+                            className="px-2.5 py-1 text-[11px] font-extrabold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                            title="Clear finished tasks"
+                          >
+                            Clear Done
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={toggleTodoListMinimized}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold transition-colors cursor-pointer"
+                          title="Minimize To Do List"
+                        >
+                          <span>Minimize</span>
+                          <ChevronUp className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Primary User Task Entry Form */}
+                    <form onSubmit={handleAddTodo} className="space-y-3 bg-slate-50/80 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-start gap-2.5">
+                        <textarea
+                          rows={2}
+                          value={newTodoText}
+                          onChange={e => setNewTodoText(e.target.value)}
+                          placeholder="Write your task or detailed multi-step plan here (long tasks supported)..."
+                          className="flex-1 w-full px-4 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 text-xs focus:outline-none focus:border-violet-500 text-slate-800 dark:text-white font-medium shadow-sm resize-y min-h-[44px]"
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleAddTodo(e);
+                            }
+                          }}
+                        />
+
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          {/* Add Button */}
+                          <button
+                            type="submit"
+                            className="flex-1 sm:flex-none px-4 py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-black rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer flex-shrink-0"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Add</span>
+                          </button>
+
+                          {/* AI Task Generator Button - Responsive & Perfectly Fitted */}
+                          <button
+                            type="button"
+                            onClick={handleGenerateAiTodos}
+                            disabled={isGeneratingTodos}
+                            className="flex-1 sm:flex-none px-3.5 py-2.5 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-rose-500 hover:from-violet-500 hover:to-rose-400 text-white font-black rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md hover:shadow-lg active:scale-95 disabled:opacity-50 transition-all cursor-pointer flex-shrink-0"
+                            title="AI Auto-Generate Tasks from Journal"
+                          >
+                            <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                            <span className="whitespace-nowrap">✨ AI Auto-Task</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Category Selection Pills (Academic, Health, Focus, Habit) */}
+                      <div className="flex items-center gap-2 pt-1 overflow-x-auto pb-1 no-scrollbar">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1 flex-shrink-0">Category:</span>
+                        {[
+                          { id: 'Academic', label: 'Academic 📚', color: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' },
+                          { id: 'Health', label: 'Health 🏃‍♂️', color: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' },
+                          { id: 'Focus', label: 'Focus 🧠', color: 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800' },
+                          { id: 'Habit', label: 'Habit ✨', color: 'bg-fuchsia-50 dark:bg-fuchsia-950/60 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-200 dark:border-fuchsia-800' },
+                        ].map(cat => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setNewTodoCategory(cat.id)}
+                            className={`px-3 py-1 rounded-full text-xs font-bold border transition-all cursor-pointer flex-shrink-0 ${
+                              newTodoCategory === cat.id
+                                ? `${cat.color} ring-2 ring-violet-400 ring-offset-1 font-extrabold shadow-sm`
+                                : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-violet-300'
+                            }`}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
+                    </form>
+
+                    {/* Aesthetic Todo Items List */}
+                    <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                      {todos.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400 text-xs bg-slate-50/50 dark:bg-slate-800/30 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                          <p className="font-medium text-slate-500 dark:text-slate-400">No tasks added yet!</p>
+                          <p className="text-[10px] text-slate-400 mt-1">Type your goal above and click Add, or tap ✨ AI Auto-Task button.</p>
+                        </div>
+                      ) : (
+                        todos.map(todo => {
+                          const getCategoryBadgeClass = (category: string) => {
+                            switch (category) {
+                              case 'Academic':
+                                return 'bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800';
+                              case 'Health':
+                                return 'bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
+                              case 'Focus':
+                                return 'bg-amber-100/80 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+                              case 'Habit':
+                                return 'bg-fuchsia-100/80 dark:bg-fuchsia-950/80 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-200 dark:border-fuchsia-800';
+                              default:
+                                return 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600';
+                            }
+                          };
+
+                          return (
+                            <div
+                              key={todo.id}
+                              className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 group ${
                                 todo.completed
-                                  ? 'bg-emerald-500 border-emerald-500 text-white'
-                                  : 'border-slate-300 dark:border-slate-600 hover:border-violet-500 bg-slate-50 dark:bg-slate-900'
+                                  ? 'bg-slate-50/60 dark:bg-slate-800/30 border-slate-200/50 dark:border-slate-800/50 text-slate-400 opacity-75 line-through'
+                                  : 'bg-white dark:bg-slate-800/90 border-slate-200/80 dark:border-slate-700/80 text-slate-800 dark:text-white shadow-sm hover:shadow-md hover:border-violet-300/80'
                               }`}
                             >
-                              {todo.completed && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                            </button>
-                            <div className="flex-1 min-w-0 space-y-1">
-                              <p className={`text-xs font-semibold leading-relaxed whitespace-pre-wrap break-words ${
-                                todo.completed ? 'line-through text-slate-400' : 'text-slate-800 dark:text-white'
-                              }`}>
-                                {todo.text}
-                              </p>
-                              {todo.isAiGenerated && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gradient-to-r from-amber-100 to-orange-100 dark:from-amber-950/80 dark:to-orange-950/80 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/80 rounded-md text-[9px] font-black uppercase">
-                                  <Sparkles className="w-2.5 h-2.5" /> AI Generated Task
-                                </span>
-                              )}
-                            </div>
-                          </div>
+                              <div className="flex items-start gap-3 flex-1 min-w-0">
+                                <button
+                                  onClick={() => handleToggleTodo(todo.id)}
+                                  className={`w-5 h-5 rounded-lg flex items-center justify-center border transition-all cursor-pointer flex-shrink-0 mt-0.5 ${
+                                    todo.completed
+                                      ? 'bg-emerald-500 border-emerald-500 text-white'
+                                      : 'border-slate-300 dark:border-slate-600 hover:border-violet-500 bg-slate-50 dark:bg-slate-900'
+                                  }`}
+                                >
+                                  {todo.completed && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                                </button>
+                                <div className="flex-1 min-w-0 space-y-1">
+                                  <p className={`text-xs font-semibold leading-relaxed whitespace-pre-wrap break-words ${
+                                    todo.completed ? 'line-through text-slate-400' : 'text-slate-800 dark:text-white'
+                                  }`}>
+                                    {todo.text}
+                                  </p>
+                                  {todo.isAiGenerated && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gradient-to-r from-amber-100 to-orange-100 dark:from-amber-950/80 dark:to-orange-950/80 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/80 rounded-md text-[9px] font-black uppercase">
+                                      <Sparkles className="w-2.5 h-2.5" /> AI Generated Task
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
 
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className={`px-2.5 py-0.5 border rounded-full text-[9px] font-extrabold ${getCategoryBadgeClass(todo.category)}`}>
-                              {todo.category}
-                            </span>
-                            <button
-                              onClick={() => handleDeleteTodo(todo.id)}
-                              className="p-1 text-slate-400 hover:text-rose-500 transition-colors cursor-pointer rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50"
-                              title="Delete task"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <span className={`px-2.5 py-0.5 border rounded-full text-[9px] font-extrabold ${getCategoryBadgeClass(todo.category)}`}>
+                                  {todo.category}
+                                </span>
+                                <button
+                                  onClick={() => handleDeleteTodo(todo.id)}
+                                  className="p-1 text-slate-400 hover:text-rose-500 transition-colors cursor-pointer rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50"
+                                  title="Delete task"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
             </div>
@@ -5058,34 +5808,64 @@ export default function App() {
                   )}
                 </div>
                 
-                {/* Switcher tabs */}
-                <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                {/* Switcher tabs + Blocked Accounts Quick Access */}
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                    <button
+                      onClick={() => setChatSidebarTab('chats')}
+                      className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                        chatSidebarTab === 'chats'
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      Chats
+                    </button>
+                    <button
+                      onClick={() => setChatSidebarTab('friends')}
+                      className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer relative ${
+                        chatSidebarTab === 'friends'
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      Classmates
+                      {pendingRequests.length > 0 && (
+                        <span className="ml-1.5 px-1.5 py-0.2 bg-rose-500 text-white rounded-full text-[9px]">
+                          {pendingRequests.length}
+                        </span>
+                      )}
+                    </button>
+                  </div>
                   <button
-                    onClick={() => setChatSidebarTab('chats')}
-                    className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      chatSidebarTab === 'chats'
-                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
-                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-                    }`}
+                    type="button"
+                    onClick={() => {
+                      fetchBlockedUsers();
+                      setShowBlockedUsersModal(true);
+                    }}
+                    title="Blocked Accounts & Security Settings"
+                    className="p-2 rounded-xl bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-rose-950/40 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors flex items-center justify-center cursor-pointer relative flex-shrink-0"
                   >
-                    Chats
-                  </button>
-                  <button
-                    onClick={() => setChatSidebarTab('friends')}
-                    className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer relative ${
-                      chatSidebarTab === 'friends'
-                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
-                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-                    }`}
-                  >
-                    Classmates
-                    {pendingRequests.length > 0 && (
-                      <span className="ml-1.5 px-1.5 py-0.2 bg-rose-500 text-white rounded-full text-[9px]">
-                        {pendingRequests.length}
-                      </span>
+                    <UserX className="w-4 h-4" />
+                    {(blockedUsersList.length > 0 || (currentUser?.blockedUsers && currentUser.blockedUsers.length > 0)) && (
+                      <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900" />
                     )}
                   </button>
                 </div>
+
+                {/* Create Group Quick Action */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewGroupName('');
+                    setSelectedGroupMembers([]);
+                    setShowCreateGroupModal(true);
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-violet-50 hover:bg-violet-100/80 dark:bg-violet-950/40 dark:hover:bg-violet-900/40 text-violet-700 dark:text-violet-300 text-xs font-bold transition-all border border-violet-200/70 dark:border-violet-800/60 cursor-pointer shadow-2xs active:scale-[0.99]"
+                >
+                  <Users className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+                  <span>Create Group Chat</span>
+                </button>
               </div>
 
               {/* Chat Sidebar Body */}
@@ -5095,13 +5875,32 @@ export default function App() {
                     <div className="text-center p-6 space-y-2">
                       <MessageSquare className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto" />
                       <p className="text-xs font-bold text-slate-500">No active chats</p>
-                      <p className="text-[10px] text-slate-400">Switch to Classmates tab to start a new conversation!</p>
+                      <p className="text-[10px] text-slate-400">Switch to Classmates tab to start a new conversation or create a group!</p>
                     </div>
                   ) : (
                     chatRooms.map(room => {
                       const isActive = activeRoomId === room.id;
                       const lastMsg = room.messages[room.messages.length - 1];
-                      const isAiCoach = room.participants.includes('dayscore_ai@reflect.edu');
+                      const isGroup = Boolean(room.isGroup || (room.participants && room.participants.length > 2));
+                      const isAiCoach = !isGroup && room.participants.includes('dayscore_ai@reflect.edu');
+                      const displayName = isGroup ? (room.name || 'Group Chat') : room.peer?.displayName;
+                      const isPeerBlocked = !isGroup && !!(
+                        currentUser?.blockedUsers?.some(e => e.toLowerCase() === room.peer?.email?.toLowerCase()) ||
+                        (room.peer as any)?.isBlockedByMe ||
+                        blockedUsersList.some(u => u.email.toLowerCase() === room.peer?.email?.toLowerCase())
+                      );
+
+                      // Determine preview sender prefix
+                      let previewPrefix = '';
+                      if (lastMsg) {
+                        if (currentUser && lastMsg.senderEmail?.toLowerCase() === currentUser.email.toLowerCase()) {
+                          previewPrefix = 'You: ';
+                        } else if (isGroup) {
+                          const sender = room.participantProfiles?.find(p => p.email.toLowerCase() === lastMsg.senderEmail?.toLowerCase());
+                          previewPrefix = sender ? `${sender.displayName.split(' ')[0]}: ` : '';
+                        }
+                      }
+
                       return (
                         <button
                           key={room.id}
@@ -5114,21 +5913,44 @@ export default function App() {
                               ? 'bg-gradient-to-r from-violet-600/15 via-fuchsia-600/10 to-indigo-600/15 border border-violet-400/50 dark:border-violet-600/50 shadow-md ring-1 ring-violet-500/30'
                               : isActive 
                               ? 'bg-gradient-to-r from-violet-500/15 via-fuchsia-500/10 to-indigo-500/15 border border-violet-300/40 dark:border-violet-700/40 shadow-sm' 
+                              : isPeerBlocked
+                              ? 'bg-rose-50/40 dark:bg-rose-950/20 border border-rose-200/40 dark:border-rose-900/30 opacity-80'
                               : 'hover:bg-slate-100/80 dark:hover:bg-slate-800/50 border border-transparent'
                           }`}
                         >
                           <div className="relative flex-shrink-0">
-                            <img src={room.peer?.avatarUrl} alt="peer" className={`w-11 h-11 rounded-full object-cover ring-2 ${isAiCoach ? 'ring-violet-500 ring-offset-2 dark:ring-offset-slate-900' : 'ring-slate-200/80 dark:ring-slate-700'}`} />
-                            <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-slate-900 ${
-                              room.peer?.online || isAiCoach ? 'bg-emerald-500' : 'bg-slate-300'
-                            }`} />
+                            {isGroup ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-violet-600 via-fuchsia-600 to-indigo-600 flex items-center justify-center text-white shadow-sm ring-1 ring-violet-400/30">
+                                <Users className="w-5 h-5 stroke-[2.2]" />
+                              </div>
+                            ) : (
+                              <SafeAvatar src={room.peer?.avatarUrl} name={room.peer?.displayName} frame={(room.peer as any)?.frame} size="md" />
+                            )}
+                            {!isGroup && (
+                              <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-slate-900 ${
+                                isPeerBlocked ? 'bg-rose-500' : (room.peer?.online || isAiCoach) ? 'bg-emerald-500' : 'bg-slate-300'
+                              }`} />
+                            )}
+                            {isGroup && (
+                              <span className="absolute -bottom-1 -right-1 px-1.5 py-0.2 bg-violet-600 text-white rounded-full text-[8px] font-black tracking-tight border-2 border-white dark:border-slate-900 shadow-2xs">
+                                {room.participants.length}
+                              </span>
+                            )}
                           </div>
                           <div className="overflow-hidden flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-1">
                               <div className="flex items-center gap-1.5 min-w-0">
-                                <p className="text-xs font-bold text-slate-900 dark:text-white truncate font-display">{room.peer?.displayName}</p>
+                                <p className="text-xs font-bold text-slate-900 dark:text-white truncate font-display">{displayName}</p>
+                                {isGroup && (
+                                  <span className="px-1.5 py-0.2 bg-violet-100 dark:bg-violet-950/80 text-violet-700 dark:text-violet-300 text-[8px] font-black rounded-full uppercase tracking-wider shrink-0">Group</span>
+                                )}
                                 {isAiCoach && (
                                   <span className="px-1.5 py-0.2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[8px] font-black rounded-full uppercase tracking-wider shrink-0">AI Coach</span>
+                                )}
+                                {isPeerBlocked && (
+                                  <span className="px-1.5 py-0.2 bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 text-[8px] font-black rounded-full uppercase tracking-wider shrink-0 flex items-center gap-0.5">
+                                    <Ban className="w-2.5 h-2.5" /> Blocked
+                                  </span>
                                 )}
                               </div>
                               {lastMsg && (
@@ -5142,8 +5964,19 @@ export default function App() {
                                 ⚡ Super Intelligent, Fast, Logical & Empathetic
                               </p>
                             )}
-                            <p className={`text-[11px] truncate mt-0.5 ${isActive ? 'text-violet-600 dark:text-violet-300 font-semibold' : 'text-slate-500 dark:text-slate-400'}`}>
-                              {lastMsg?.text || 'Tap to send a message...'}
+                            {isGroup && !lastMsg && (
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {room.participants.length} members in study squad
+                              </p>
+                            )}
+                            <p className={`text-[11px] truncate mt-0.5 ${
+                              isPeerBlocked 
+                                ? 'text-rose-500 dark:text-rose-400 font-medium' 
+                                : isActive 
+                                ? 'text-violet-600 dark:text-violet-300 font-semibold' 
+                                : 'text-slate-500 dark:text-slate-400'
+                            }`}>
+                              {isPeerBlocked ? '🚫 Blocked contact • Tap to unblock' : (lastMsg?.text ? `${previewPrefix}${lastMsg.text}` : 'Tap to send a message...')}
                             </p>
                           </div>
                         </button>
@@ -5239,7 +6072,18 @@ export default function App() {
               {activeRoomId ? (
                 (() => {
                   const currentRoom = chatRooms.find(r => r.id === activeRoomId);
+                  const isGroup = Boolean(currentRoom?.isGroup || (currentRoom?.participants && currentRoom.participants.length > 2));
                   const activePeer = currentRoom?.peer;
+                  const isAiCoach = !isGroup && currentRoom?.participants?.includes('dayscore_ai@reflect.edu');
+                  const isPeerBlockedByMe = !!(
+                    !isGroup && activePeer && !isAiCoach && (
+                      currentUser?.blockedUsers?.some(e => e.toLowerCase() === activePeer.email?.toLowerCase()) ||
+                      (activePeer as any)?.isBlockedByMe ||
+                      blockedUsersList.some(u => u.email.toLowerCase() === activePeer.email?.toLowerCase())
+                    )
+                  );
+                  const hasPeerBlockedMe = !isGroup && !!((activePeer as any)?.hasBlockedMe);
+
                   return (
                     <>
                       {/* Top Peer Info bar (Instagram DM Style Header) */}
@@ -5255,41 +6099,114 @@ export default function App() {
                             title="Back to Direct Messages list"
                           >
                             <ArrowLeft className="w-4 h-4 text-violet-600 dark:text-violet-400 stroke-[2.5]" />
-                            <span className="font-black">Direct Messages</span>
+                            <span className="font-black">Back</span>
                           </button>
-                          <div className="relative cursor-pointer" onClick={() => setShowPeerInfoDrawer(true)}>
-                            <SafeAvatar
-                              src={activePeer?.avatarUrl}
-                              name={activePeer?.displayName}
-                              frame={(activePeer as any)?.frame}
-                              size="md"
-                              status={activePeer?.online ? 'online' : 'offline'}
-                            />
+
+                          {/* Avatar */}
+                          <div 
+                            className="relative cursor-pointer group flex-shrink-0" 
+                            onClick={() => setShowPeerInfoDrawer(true)}
+                            title="Click to view details"
+                          >
+                            {isGroup ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-violet-600 via-fuchsia-600 to-indigo-600 flex items-center justify-center text-white shadow-sm ring-2 ring-violet-400/30">
+                                <Users className="w-5 h-5 stroke-[2.2]" />
+                              </div>
+                            ) : (
+                              <SafeAvatar
+                                src={activePeer?.avatarUrl}
+                                name={activePeer?.displayName}
+                                frame={(activePeer as any)?.frame}
+                                size="md"
+                                status={isPeerBlockedByMe ? undefined : (activePeer?.online ? 'online' : 'offline')}
+                              />
+                            )}
+                            {!isGroup && isPeerBlockedByMe && (
+                              <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-rose-500 border-2 border-white dark:border-slate-900 flex items-center justify-center text-white text-[9px] font-bold">
+                                🚫
+                              </div>
+                            )}
                           </div>
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <h4 className="text-sm font-bold text-slate-900 dark:text-white font-display">
-                                {activePeer?.displayName}
+
+                          {/* Title & Subtitle */}
+                          <div 
+                            className="cursor-pointer group min-w-0"
+                            onClick={() => setShowPeerInfoDrawer(true)}
+                            title="Click to view group or profile info"
+                          >
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <h4 className="text-sm font-bold text-slate-900 dark:text-white font-display group-hover:text-violet-600 transition-colors truncate">
+                                {isGroup ? (currentRoom?.name || 'Study Squad Group') : activePeer?.displayName}
                               </h4>
-                              <CheckCircle2 className="w-3.5 h-3.5 text-violet-500 fill-violet-500/20" />
+                              {isGroup ? (
+                                <span className="px-1.5 py-0.2 bg-violet-100 dark:bg-violet-950/80 text-violet-700 dark:text-violet-300 text-[8px] font-black rounded-full uppercase tracking-wider shrink-0">Group</span>
+                              ) : isAiCoach ? (
+                                <span className="px-1.5 py-0.2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[8px] font-black rounded-full uppercase tracking-wider shrink-0">AI Coach</span>
+                              ) : (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-violet-500 fill-violet-500/20 shrink-0" />
+                              )}
+                              {!isGroup && isPeerBlockedByMe && (
+                                <span className="px-1.5 py-0.2 bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 text-[8px] font-black rounded-full uppercase tracking-wider flex items-center gap-0.5 shrink-0">
+                                  <Ban className="w-2.5 h-2.5" /> Blocked
+                                </span>
+                              )}
                             </div>
-                            <p className="text-[10px] text-slate-400 font-medium">
-                              @{(activePeer as any)?.username || activePeer?.email.split('@')[0]} • {activePeer?.online ? 'Active now' : 'Active recently'}
+                            <p className="text-[10px] text-slate-400 font-medium truncate">
+                              {isGroup ? (
+                                `${currentRoom?.participants?.length || 0} participants • ${currentRoom?.participantProfiles?.map(p => p.displayName.split(' ')[0]).slice(0, 3).join(', ')}${(currentRoom?.participants?.length || 0) > 3 ? '...' : ''}`
+                              ) : (
+                                `@${(activePeer as any)?.username || activePeer?.email.split('@')[0]} • ${isPeerBlockedByMe ? 'Blocked' : activePeer?.online ? 'Active now' : 'Active recently'}`
+                              )}
                             </p>
                           </div>
                         </div>
 
                         {/* Top Right Action Icons */}
-                        <div className="flex items-center gap-1 md:gap-2">
+                        <div className="flex items-center gap-1 md:gap-2 shrink-0">
+                          {isGroup && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedGroupMembers([]);
+                                setShowAddMembersModal(true);
+                              }}
+                              className="px-2.5 py-1.5 bg-violet-50 hover:bg-violet-100 dark:bg-violet-950/50 dark:hover:bg-violet-900/60 text-violet-700 dark:text-violet-300 rounded-xl text-xs font-bold transition-all border border-violet-200/70 dark:border-violet-800/60 cursor-pointer flex items-center gap-1.5 shadow-2xs active:scale-95"
+                              title="Add members to this group"
+                            >
+                              <UserPlus className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Add Member</span>
+                            </button>
+                          )}
+
+                          {!isGroup && isPeerBlockedByMe ? (
+                            <button
+                              type="button"
+                              onClick={() => handleUnblockUser(activePeer?.email, activePeer?.displayName)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                              title="Unblock this user"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Unblock</span>
+                            </button>
+                          ) : (!isGroup && !isAiCoach) && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmBlockTarget(activePeer)}
+                              className="p-2 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title="Block user"
+                            >
+                              <UserX className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setShowPeerInfoDrawer(!showPeerInfoDrawer)}
                             className={`p-2 rounded-full transition-colors cursor-pointer ${
                               showPeerInfoDrawer ? 'text-violet-600 bg-violet-50 dark:bg-violet-950/50' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                             }`}
-                            title="Chat Details"
+                            title={isGroup ? 'Group Members & Info' : 'Profile & Safety Details'}
                           >
-                            <Info className="w-5 h-5" />
+                            {isGroup ? <Users className="w-5 h-5" /> : <Info className="w-5 h-5" />}
                           </button>
                         </div>
                       </div>
@@ -5300,24 +6217,119 @@ export default function App() {
                           
                           {/* Chat Encryption / Header notice */}
                           <div className="text-center my-4 space-y-2 flex flex-col items-center">
-                            <SafeAvatar src={activePeer?.avatarUrl} name={activePeer?.displayName} frame={(activePeer as any)?.frame} size="xl" />
-                            <h3 className="text-sm font-bold text-slate-900 dark:text-white font-display">{activePeer?.displayName}</h3>
-                            <p className="text-[11px] text-slate-400">Classmate Student Account • Reflection Peer</p>
+                            <div className="relative cursor-pointer" onClick={() => setShowPeerInfoDrawer(true)}>
+                              {isGroup ? (
+                                <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-violet-600 via-fuchsia-600 to-indigo-600 flex items-center justify-center text-white shadow-md ring-4 ring-violet-500/20">
+                                  <Users className="w-8 h-8 stroke-[2.2]" />
+                                </div>
+                              ) : (
+                                <SafeAvatar src={activePeer?.avatarUrl} name={activePeer?.displayName} frame={(activePeer as any)?.frame} size="xl" />
+                              )}
+                              {!isGroup && isPeerBlockedByMe && (
+                                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-rose-500 border-2 border-white dark:border-slate-900 flex items-center justify-center text-white text-xs font-bold shadow-sm">
+                                  🚫
+                                </div>
+                              )}
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white font-display flex items-center gap-1.5">
+                              {isGroup ? (currentRoom?.name || 'Group Chat') : activePeer?.displayName}
+                              {!isGroup && isPeerBlockedByMe && (
+                                <span className="text-[10px] font-black text-rose-500 uppercase tracking-wider bg-rose-100 dark:bg-rose-950/80 px-2 py-0.5 rounded-full">Blocked</span>
+                              )}
+                            </h3>
+                            <p className="text-[11px] text-slate-400">
+                              {isGroup ? `${currentRoom?.participants?.length || 0} participants in collaborative study group` : 'Classmate Student Account • Reflection Peer'}
+                            </p>
                             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/80 dark:bg-slate-900/80 border border-slate-200/60 dark:border-slate-800 rounded-full text-[10px] text-slate-500 font-medium shadow-xs">
-                              <Shield className="w-3 h-3 text-emerald-500" /> Encrypted Direct Messaging
+                              <Shield className="w-3 h-3 text-emerald-500" /> {isGroup ? 'Group Encrypted Study Channel' : 'Encrypted Direct Messaging'}
                             </div>
                           </div>
 
+                          {/* Block Warning Notice if blocked by me */}
+                          {!isGroup && isPeerBlockedByMe && (
+                            <div className="p-3.5 bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200/80 dark:border-rose-900/60 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+                              <div className="flex items-center gap-2.5 text-rose-700 dark:text-rose-300 text-xs font-medium text-left">
+                                <Ban className="w-4 h-4 text-rose-500 shrink-0" />
+                                <span>You have blocked <strong>{activePeer?.displayName}</strong>. You will not receive any new messages from this account.</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleUnblockUser(activePeer?.email, activePeer?.displayName)}
+                                className="px-3.5 py-1.5 bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700/60 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1.5 shrink-0"
+                              >
+                                <ShieldCheck className="w-3.5 h-3.5" /> Unblock {activePeer?.displayName?.split(' ')[0]}
+                              </button>
+                            </div>
+                          )}
+
+                          {!isGroup && hasPeerBlockedMe && (
+                            <div className="p-3 bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl flex items-center gap-2 text-xs text-slate-500 font-medium">
+                              <ShieldAlert className="w-4 h-4 text-slate-400 shrink-0" />
+                              <span>This conversation is currently restricted.</span>
+                            </div>
+                          )}
+
                           {chatMessages.map((msg, idx) => {
-                            const isMe = currentUser && msg.senderEmail === currentUser.email;
+                            const isMe = currentUser && msg.senderEmail?.toLowerCase() === currentUser.email?.toLowerCase();
                             const reactions = messageReactions[msg.id] || [];
+
+                            // Check if system message
+                            const isSystemMsg = msg.text?.startsWith('👋 Welcome') || msg.text?.startsWith('📢') || msg.text?.startsWith('🚪') || msg.text?.startsWith('✨ Group');
+
+                            if (isSystemMsg) {
+                              return (
+                                <div key={msg.id || idx} className="w-full flex justify-center my-2">
+                                  <div className="px-3.5 py-1 bg-slate-200/60 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 text-[10px] font-semibold rounded-full max-w-[85%] text-center shadow-2xs border border-slate-200/40 dark:border-slate-700/40">
+                                    {msg.text}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // Sender profile lookup
+                            const senderProfile = currentRoom?.participantProfiles?.find(p => p.email.toLowerCase() === msg.senderEmail?.toLowerCase())
+                              || (isMe ? currentUser : null)
+                              || friendsList.find(f => f.email.toLowerCase() === msg.senderEmail?.toLowerCase())
+                              || (msg.senderEmail === 'dayscore_ai@reflect.edu' ? {
+                                  email: 'dayscore_ai@reflect.edu',
+                                  displayName: 'DayScore AI Coach ✨',
+                                  avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear',
+                                  username: 'dayscore_ai',
+                                } : null);
+
+                            const senderName = senderProfile?.displayName || (isMe ? 'You' : msg.senderEmail?.split('@')[0] || 'Member');
+                            const senderAvatar = senderProfile?.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${msg.senderEmail}`;
+                            const isSenderAi = msg.senderEmail === 'dayscore_ai@reflect.edu';
 
                             return (
                               <div key={msg.id || idx} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative`}>
+                                {/* Participant Name label above non-me message in group or normal chats */}
+                                {!isMe && (
+                                  <div className="flex items-center gap-1.5 mb-1 ml-9">
+                                    <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">
+                                      {senderName}
+                                    </span>
+                                    {isSenderAi ? (
+                                      <span className="px-1.5 py-0.2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[8px] font-black rounded-full uppercase tracking-wider">
+                                        AI Coach
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] text-slate-400">
+                                        @{senderProfile?.username || msg.senderEmail?.split('@')[0]}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+
                                 <div className="flex items-end gap-2 max-w-[80%] sm:max-w-[70%]">
                                   {!isMe && (
-                                    <div className="mb-1 shrink-0">
-                                      <SafeAvatar src={activePeer?.avatarUrl} name={activePeer?.displayName} size="xs" />
+                                    <div className="mb-1 shrink-0" title={senderName}>
+                                      <SafeAvatar 
+                                        src={senderAvatar} 
+                                        name={senderName} 
+                                        frame={(senderProfile as any)?.frame}
+                                        size="xs" 
+                                      />
                                     </div>
                                   )}
                                   
@@ -5394,7 +6406,7 @@ export default function App() {
                                       </div>
                                     )}
 
-                                    {/* Hover Quick Reaction Pill (Instagram DM Double-Tap / Reaction style) */}
+                                    {/* Hover Quick Reaction Pill */}
                                     <div className={`absolute top-1/2 -translate-y-1/2 ${isMe ? '-left-20' : '-right-20'} opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-full border border-slate-200 dark:border-slate-700 shadow-md z-10`}>
                                       {['❤️', '👍', '🔥', '😂'].map(emoji => (
                                         <button
@@ -5429,44 +6441,251 @@ export default function App() {
                           <div ref={chatEndRef} />
                         </div>
 
-                        {/* Peer Info Drawer (Right Sidebar if toggled) */}
+                        {/* Peer / Group Info Drawer */}
                         {showPeerInfoDrawer && (
-                          <div className="w-64 border-l border-slate-200/60 dark:border-slate-800/60 bg-white dark:bg-slate-900 p-4 space-y-4 overflow-y-auto hidden lg:block">
-                            <div className="text-center space-y-2 pt-2">
-                              <img src={activePeer?.avatarUrl} alt="avatar" className="w-16 h-16 rounded-full object-cover mx-auto ring-4 ring-violet-500/10" />
-                              <h4 className="text-sm font-bold text-slate-900 dark:text-white font-display">{activePeer?.displayName}</h4>
-                              <p className="text-[10px] text-slate-400">@{(activePeer as any)?.username || activePeer?.email.split('@')[0]}</p>
-                            </div>
-
-                            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Study Stats</span>
-                              <div className="p-2.5 bg-slate-50 dark:bg-slate-800/50 rounded-xl space-y-1">
-                                <div className="flex justify-between text-xs font-semibold">
-                                  <span className="text-slate-500">Streak:</span>
-                                  <span className="text-amber-500 font-bold">{(activePeer as any)?.stats?.currentStreak || 5} Days 🔥</span>
+                          <>
+                            {/* Mobile overlay backdrop */}
+                            <div 
+                              onClick={() => setShowPeerInfoDrawer(false)}
+                              className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-30 lg:hidden"
+                            />
+                            <div className="fixed inset-y-0 right-0 z-40 w-84 max-w-[88vw] lg:static lg:w-76 border-l border-slate-200/60 dark:border-slate-800/60 bg-white dark:bg-slate-900 p-4 space-y-4 overflow-y-auto shadow-2xl lg:shadow-none flex flex-col">
+                              <div className="space-y-4 flex-1">
+                                {/* Header */}
+                                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                                    {isGroup ? <Users className="w-3.5 h-3.5 text-violet-500" /> : <Info className="w-3.5 h-3.5 text-violet-500" />}
+                                    {isGroup ? 'Group Details' : 'Classmate Profile'}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowPeerInfoDrawer(false)}
+                                    className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
                                 </div>
-                                <div className="flex justify-between text-xs font-semibold">
-                                  <span className="text-slate-500">Focus Hours:</span>
-                                  <span className="text-violet-600 dark:text-violet-400 font-bold">{(activePeer as any)?.stats?.totalFocusMinutes || 120} mins</span>
+
+                                {isGroup ? (
+                                  /* GROUP DRAWER CONTENT */
+                                  <div className="space-y-4">
+                                    <div className="text-center space-y-2 pt-1">
+                                      <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-violet-600 via-fuchsia-600 to-indigo-600 flex items-center justify-center text-white shadow-md mx-auto ring-4 ring-violet-500/20">
+                                        <Users className="w-8 h-8 stroke-[2.2]" />
+                                      </div>
+                                      <div>
+                                        <h4 className="text-base font-bold text-slate-900 dark:text-white font-display">
+                                          {currentRoom?.name || 'Study Squad Group'}
+                                        </h4>
+                                        <p className="text-[11px] text-slate-400 font-medium">
+                                          {currentRoom?.participants?.length || 0} active participants
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedGroupMembers([]);
+                                          setShowAddMembersModal(true);
+                                        }}
+                                        className="w-full py-2 px-3 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                                      >
+                                        <UserPlus className="w-3.5 h-3.5" /> Add Classmate to Group
+                                      </button>
+                                    </div>
+
+                                    {/* Participants List */}
+                                    <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                          Participants ({currentRoom?.participants?.length || 0})
+                                        </span>
+                                      </div>
+
+                                      <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                                        {(currentRoom?.participantProfiles || []).map(member => {
+                                          const isMeMember = currentUser && member.email.toLowerCase() === currentUser.email.toLowerCase();
+                                          const isAdmin = member.role === 'admin' || member.email === currentRoom?.groupAdminEmail;
+                                          const isMemberAi = member.email === 'dayscore_ai@reflect.edu';
+
+                                          return (
+                                            <div key={member.email} className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-150/60 dark:border-slate-800">
+                                              <div className="flex items-center gap-2.5 overflow-hidden">
+                                                <SafeAvatar src={member.avatarUrl} name={member.displayName} frame={(member as any)?.frame} size="sm" />
+                                                <div className="overflow-hidden">
+                                                  <div className="flex items-center gap-1">
+                                                    <p className="text-xs font-bold text-slate-900 dark:text-white truncate leading-tight">
+                                                      {member.displayName} {isMeMember && '(You)'}
+                                                    </p>
+                                                    {isMemberAi && (
+                                                      <span className="px-1 py-0.2 bg-violet-600 text-white text-[7px] font-black rounded-full uppercase">AI</span>
+                                                    )}
+                                                  </div>
+                                                  <p className="text-[9px] text-slate-400 truncate">@{member.username || member.email.split('@')[0]}</p>
+                                                </div>
+                                              </div>
+                                              <div className="flex items-center gap-1">
+                                                {isAdmin ? (
+                                                  <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 text-[8px] font-black rounded-full uppercase tracking-wider">
+                                                    Admin
+                                                  </span>
+                                                ) : (
+                                                  <span className="px-1.5 py-0.5 text-slate-400 text-[9px] font-semibold">
+                                                    Member
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+
+                                    {/* Leave Group Button */}
+                                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (confirm(`Are you sure you want to leave ${currentRoom?.name || 'this group'}?`)) {
+                                            handleLeaveGroup(currentRoom.id);
+                                          }
+                                        }}
+                                        className="w-full py-2.5 px-3 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold transition-all border border-rose-200/80 dark:border-rose-900/60 flex items-center justify-center gap-1.5 cursor-pointer"
+                                      >
+                                        <LogOut className="w-3.5 h-3.5" /> Leave Group Chat
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  /* INDIVIDUAL PEER DRAWER CONTENT */
+                                  <>
+                                    <div className="text-center space-y-2 pt-1">
+                                      <div className="relative inline-block mx-auto">
+                                        <SafeAvatar 
+                                          src={activePeer?.avatarUrl} 
+                                          name={activePeer?.displayName} 
+                                          frame={(activePeer as any)?.frame} 
+                                          size="xl" 
+                                        />
+                                        {isPeerBlockedByMe && (
+                                          <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-rose-500 border-2 border-white dark:border-slate-900 flex items-center justify-center text-white text-xs font-bold shadow-xs">
+                                            🚫
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div>
+                                        <div className="flex items-center justify-center gap-1.5">
+                                          <h4 className="text-sm font-bold text-slate-900 dark:text-white font-display">{activePeer?.displayName}</h4>
+                                          {isAiCoach ? (
+                                            <span className="px-1.5 py-0.2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[8px] font-black rounded-full uppercase tracking-wider">AI</span>
+                                          ) : (
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-violet-500 fill-violet-500/20" />
+                                          )}
+                                        </div>
+                                        <p className="text-[10px] text-slate-400 font-medium">@{(activePeer as any)?.username || activePeer?.email.split('@')[0]}</p>
+                                      </div>
+
+                                      {/* Status Note preview if available */}
+                                      {(activePeer as any)?.statusNote && (
+                                        <div className="p-2.5 bg-violet-50/70 dark:bg-violet-950/30 border border-violet-100 dark:border-violet-900/40 rounded-2xl text-left">
+                                          <span className="text-[9px] font-bold text-violet-500 uppercase tracking-wider block mb-1">Status Note</span>
+                                          <p className="text-xs text-violet-900 dark:text-violet-200 font-medium">{(activePeer as any)?.statusNote}</p>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Study Stats */}
+                                    <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Study Stats</span>
+                                      <div className="p-2.5 bg-slate-50 dark:bg-slate-800/50 rounded-xl space-y-1.5">
+                                        <div className="flex justify-between text-xs font-semibold">
+                                          <span className="text-slate-500">Streak:</span>
+                                          <span className="text-amber-500 font-bold">{(activePeer as any)?.stats?.currentStreak || 5} Days 🔥</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs font-semibold">
+                                          <span className="text-slate-500">Focus Hours:</span>
+                                          <span className="text-violet-600 dark:text-violet-400 font-bold">{(activePeer as any)?.stats?.totalFocusMinutes || 120} mins</span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Privacy & Safety - BLOCK / UNBLOCK OPTION */}
+                                    {!isAiCoach && (
+                                      <div className="space-y-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                          <Shield className="w-3 h-3 text-violet-500" /> Privacy & Safety
+                                        </span>
+
+                                        {isPeerBlockedByMe ? (
+                                          <div className="p-3 bg-rose-50/90 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/40 rounded-2xl space-y-2">
+                                            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-300">
+                                              <Ban className="w-4 h-4 text-rose-500" /> Contact is Blocked
+                                            </div>
+                                            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                                              {activePeer?.displayName} is blocked. They cannot send you messages or view your activity.
+                                            </p>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleUnblockUser(activePeer?.email, activePeer?.displayName)}
+                                              className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                                            >
+                                              <ShieldCheck className="w-3.5 h-3.5" /> Unblock {activePeer?.displayName?.split(' ')[0]}
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 rounded-2xl space-y-2">
+                                            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                                              If you want to stop receiving messages or protect your peace of mind, you can block this classmate.
+                                            </p>
+                                            <button
+                                              type="button"
+                                              onClick={() => setConfirmBlockTarget(activePeer)}
+                                              className="w-full py-2 px-3 bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                                            >
+                                              <UserX className="w-3.5 h-3.5" /> Block {activePeer?.displayName?.split(' ')[0]}
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+
+                                <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                  <button 
+                                    type="button"
+                                    onClick={() => showToast('Chat notifications muted for 24h', 'info')}
+                                    className="w-full text-left p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 rounded-xl transition-colors flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <Bell className="w-4 h-4 text-slate-400" /> Mute Notifications
+                                  </button>
                                 </div>
                               </div>
                             </div>
-
-                            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Privacy & Actions</span>
-                              <button 
-                                onClick={() => showToast('Chat notifications muted for 24h', 'info')}
-                                className="w-full text-left p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 rounded-xl transition-colors flex items-center gap-2 cursor-pointer"
-                              >
-                                <Bell className="w-4 h-4 text-slate-400" /> Mute Notifications
-                              </button>
-                            </div>
-                          </div>
+                          </>
                         )}
                       </div>
 
-                      {/* Live Voice Mail Recording Mode or Regular Message Input Bar */}
-                      {isRecordingVoiceNote ? (
+                      {/* Message Input Area / Blocked Status Bar */}
+                      {isPeerBlockedByMe ? (
+                        <div className="p-4 bg-rose-50/95 dark:bg-rose-950/60 border-t border-rose-200/80 dark:border-rose-900/60 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+                          <div className="flex items-center gap-2.5 text-xs text-rose-800 dark:text-rose-300 font-medium">
+                            <Ban className="w-4 h-4 text-rose-500 shrink-0" />
+                            <span>You blocked <strong>{activePeer?.displayName}</strong>. You cannot send or receive messages while blocked.</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleUnblockUser(activePeer?.email, activePeer?.displayName)}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full text-xs font-bold cursor-pointer transition-all shadow-sm flex items-center gap-1.5 shrink-0"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5" /> Unblock Contact
+                          </button>
+                        </div>
+                      ) : hasPeerBlockedMe ? (
+                        <div className="p-4 bg-slate-100 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs text-slate-500 font-medium">
+                          <ShieldAlert className="w-4 h-4 text-slate-400 shrink-0" />
+                          <span>You cannot send messages to this conversation at this time.</span>
+                        </div>
+                      ) : isRecordingVoiceNote ? (
                         <div className="p-3 md:p-4 bg-rose-500/10 dark:bg-rose-950/30 border-t border-rose-500/20 flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
                             <div className="relative flex items-center justify-center">
@@ -5513,8 +6732,6 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="p-3 md:p-4 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/60 dark:border-slate-800/60 flex items-center gap-2">
-                          {/* Note: Photo attachment removed per user request */}
-                          
                           {/* Mic / Voice Note Button */}
                           <button
                             type="button"
@@ -7441,6 +8658,562 @@ export default function App() {
                       ))}
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Confirmation Modal to Block a User */}
+        {confirmBlockTarget && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 flex items-center justify-center font-bold">
+                    <UserX className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white font-display">Block Classmate?</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConfirmBlockTarget(null)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl flex items-center gap-3">
+                <SafeAvatar
+                  src={confirmBlockTarget.avatarUrl}
+                  name={confirmBlockTarget.displayName}
+                  frame={(confirmBlockTarget as any)?.frame}
+                  size="md"
+                />
+                <div className="overflow-hidden">
+                  <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{confirmBlockTarget.displayName}</p>
+                  <p className="text-xs text-slate-400 truncate">@{(confirmBlockTarget as any)?.username || confirmBlockTarget.email.split('@')[0]}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                <p>
+                  Are you sure you want to block <strong>{confirmBlockTarget.displayName}</strong>?
+                </p>
+                <ul className="space-y-1 text-[11px] text-slate-500 dark:text-slate-400 list-disc list-inside">
+                  <li>They will not be able to send you direct messages.</li>
+                  <li>They cannot see your active online status or notes.</li>
+                  <li>You can unblock them anytime if you change your mind.</li>
+                </ul>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmBlockTarget(null)}
+                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBlockUser(confirmBlockTarget.email, confirmBlockTarget.displayName)}
+                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Ban className="w-3.5 h-3.5" /> Block User
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Blocked Accounts Management Modal */}
+        {showBlockedUsersModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4 max-h-[85vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 flex items-center justify-center font-bold">
+                    <UserX className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-white font-display">Blocked Contacts</h3>
+                    <p className="text-[11px] text-slate-400 font-medium">Manage who is restricted from messaging you</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBlockedUsersModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                Blocked people cannot send you messages or view your live presence. If you change your mind, you can unblock anyone below.
+              </p>
+
+              <div className="flex-1 overflow-y-auto space-y-2 py-2 pr-1 custom-scrollbar">
+                {blockedUsersList.length === 0 ? (
+                  <div className="text-center py-10 space-y-2">
+                    <ShieldCheck className="w-10 h-10 text-emerald-500/60 mx-auto" />
+                    <p className="text-xs font-bold text-slate-700 dark:text-slate-300">No Blocked Contacts</p>
+                    <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
+                      You haven't blocked anyone yet. When you block someone from a chat, they will appear here.
+                    </p>
+                  </div>
+                ) : (
+                  blockedUsersList.map(user => (
+                    <div
+                      key={user.email}
+                      className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-800"
+                    >
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <SafeAvatar
+                          src={user.avatarUrl}
+                          name={user.displayName}
+                          frame={user.frame}
+                          size="md"
+                        />
+                        <div className="overflow-hidden">
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">{user.displayName}</h4>
+                          <p className="text-[10px] text-slate-400 truncate">@{user.username || user.email.split('@')[0]}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleUnblockUser(user.email, user.displayName)}
+                        className="px-3.5 py-1.5 bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700/60 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1.5 shrink-0 active:scale-95"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" /> Unblock
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowBlockedUsersModal(false)}
+                  className="w-full py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  Done
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Create Group Chat Modal */}
+        {showCreateGroupModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4 max-h-[90vh] flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-violet-600 via-fuchsia-600 to-indigo-600 text-white flex items-center justify-center font-bold shadow-sm">
+                    <Users className="w-5 h-5 stroke-[2.2]" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-white font-display">Create Group Chat</h3>
+                    <p className="text-[11px] text-slate-400 font-medium">Collaborate with multiple classmates in one channel</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateGroupModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Group Name Input */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Group Name
+                </label>
+                <input
+                  type="text"
+                  value={newGroupName}
+                  onChange={e => setNewGroupName(e.target.value)}
+                  placeholder="e.g. Algorithms & Math Study Squad 🚀"
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+                  maxLength={50}
+                  autoFocus
+                />
+              </div>
+
+              {/* Members Selection */}
+              <div className="space-y-2 flex-1 overflow-hidden flex flex-col">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Select Members ({selectedGroupMembers.length} selected)
+                  </label>
+                  <span className="text-[10px] text-slate-400 font-medium">Click to select or deselect</span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 max-h-56 custom-scrollbar">
+                  {[
+                    {
+                      email: 'dayscore_ai@reflect.edu',
+                      displayName: 'DayScore AI Coach ✨',
+                      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear',
+                      username: 'dayscore_ai',
+                    },
+                    ...friendsList,
+                    ...userSearchResult,
+                    {
+                      email: 'emma.watson@student.reflect.edu',
+                      displayName: 'Emma Watson',
+                      avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=EmmaWatson',
+                      username: 'emma_watson',
+                    },
+                    {
+                      email: 'lukas.weber@student.reflect.edu',
+                      displayName: 'Lukas Weber',
+                      avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=LukasWeber',
+                      username: 'lukas_w',
+                    },
+                    {
+                      email: 'yuki.tanaka@student.reflect.edu',
+                      displayName: 'Yuki Tanaka',
+                      avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=YukiTanaka',
+                      username: 'yuki_tanaka',
+                    }
+                  ]
+                    .filter((c, index, self) => 
+                      c.email && 
+                      c.email.toLowerCase() !== currentUser?.email?.toLowerCase() &&
+                      self.findIndex(s => s.email.toLowerCase() === c.email.toLowerCase()) === index
+                    )
+                    .map(member => {
+                      const isSelected = selectedGroupMembers.includes(member.email);
+                      const isAi = member.email === 'dayscore_ai@reflect.edu';
+
+                      return (
+                        <div
+                          key={member.email}
+                          onClick={() => {
+                            setSelectedGroupMembers(prev => 
+                              isSelected ? prev.filter(e => e !== member.email) : [...prev, member.email]
+                            );
+                          }}
+                          className={`flex items-center justify-between p-2.5 rounded-2xl cursor-pointer transition-all border ${
+                            isSelected
+                              ? 'bg-violet-50 dark:bg-violet-950/40 border-violet-300 dark:border-violet-700 shadow-2xs'
+                              : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200/60 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 overflow-hidden">
+                            <SafeAvatar src={member.avatarUrl} name={member.displayName} frame={(member as any)?.frame} size="sm" />
+                            <div className="overflow-hidden">
+                              <div className="flex items-center gap-1.5">
+                                <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">{member.displayName}</h4>
+                                {isAi && (
+                                  <span className="px-1.5 py-0.2 bg-violet-600 text-white text-[7px] font-black rounded-full uppercase">AI Coach</span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 truncate">@{member.username || member.email.split('@')[0]}</p>
+                            </div>
+                          </div>
+
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${
+                            isSelected 
+                              ? 'bg-violet-600 text-white' 
+                              : 'border-2 border-slate-300 dark:border-slate-600'
+                          }`}>
+                            {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateGroupModal(false)}
+                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!newGroupName.trim() || isCreatingGroup}
+                  onClick={handleCreateGroupChat}
+                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-black text-white bg-gradient-to-r from-violet-600 via-fuchsia-600 to-indigo-600 hover:opacity-90 disabled:opacity-50 transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {isCreatingGroup ? (
+                    <>Creating Group...</>
+                  ) : (
+                    <>
+                      <Users className="w-3.5 h-3.5" />
+                      Create Group ({selectedGroupMembers.length + 1})
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Add Members to Group Modal */}
+        {showAddMembersModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4 max-h-[85vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-violet-100 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400 flex items-center justify-center font-bold">
+                    <UserPlus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-white font-display">Add Classmates to Group</h3>
+                    <p className="text-[11px] text-slate-400 font-medium">Invite peers to join this active conversation</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddMembersModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Members Selector (excluding current group members) */}
+              <div className="space-y-2 flex-1 overflow-hidden flex flex-col">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Select Classmates to Add ({selectedGroupMembers.length} chosen)
+                </span>
+
+                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 max-h-60 custom-scrollbar">
+                  {(() => {
+                    const currentRoom = chatRooms.find(r => r.id === activeRoomId);
+                    const currentParticipants = currentRoom?.participants || [];
+
+                    const availableToAdd = [
+                      {
+                        email: 'dayscore_ai@reflect.edu',
+                        displayName: 'DayScore AI Coach ✨',
+                        avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=DayScoreAICoach&backgroundColor=7c3aed,c084fc&backgroundType=gradientLinear',
+                        username: 'dayscore_ai',
+                      },
+                      ...friendsList,
+                      ...userSearchResult,
+                      {
+                        email: 'emma.watson@student.reflect.edu',
+                        displayName: 'Emma Watson',
+                        avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=EmmaWatson',
+                        username: 'emma_watson',
+                      },
+                      {
+                        email: 'lukas.weber@student.reflect.edu',
+                        displayName: 'Lukas Weber',
+                        avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=LukasWeber',
+                        username: 'lukas_w',
+                      },
+                      {
+                        email: 'yuki.tanaka@student.reflect.edu',
+                        displayName: 'Yuki Tanaka',
+                        avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=YukiTanaka',
+                        username: 'yuki_tanaka',
+                      }
+                    ]
+                      .filter((c, index, self) => 
+                        c.email && 
+                        c.email.toLowerCase() !== currentUser?.email?.toLowerCase() &&
+                        !currentParticipants.some(p => p.toLowerCase() === c.email.toLowerCase()) &&
+                        self.findIndex(s => s.email.toLowerCase() === c.email.toLowerCase()) === index
+                      );
+
+                    if (availableToAdd.length === 0) {
+                      return (
+                        <div className="text-center py-8 space-y-1">
+                          <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
+                          <p className="text-xs font-bold text-slate-700 dark:text-slate-300">Everyone is already in this group!</p>
+                          <p className="text-[11px] text-slate-400">All your active contacts and classmates are already members.</p>
+                        </div>
+                      );
+                    }
+
+                    return availableToAdd.map(member => {
+                      const isSelected = selectedGroupMembers.includes(member.email);
+                      const isAi = member.email === 'dayscore_ai@reflect.edu';
+
+                      return (
+                        <div
+                          key={member.email}
+                          onClick={() => {
+                            setSelectedGroupMembers(prev => 
+                              isSelected ? prev.filter(e => e !== member.email) : [...prev, member.email]
+                            );
+                          }}
+                          className={`flex items-center justify-between p-2.5 rounded-2xl cursor-pointer transition-all border ${
+                            isSelected
+                              ? 'bg-violet-50 dark:bg-violet-950/40 border-violet-300 dark:border-violet-700 shadow-2xs'
+                              : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200/60 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 overflow-hidden">
+                            <SafeAvatar src={member.avatarUrl} name={member.displayName} frame={(member as any)?.frame} size="sm" />
+                            <div className="overflow-hidden">
+                              <div className="flex items-center gap-1.5">
+                                <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">{member.displayName}</h4>
+                                {isAi && (
+                                  <span className="px-1.5 py-0.2 bg-violet-600 text-white text-[7px] font-black rounded-full uppercase">AI Coach</span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 truncate">@{member.username || member.email.split('@')[0]}</p>
+                            </div>
+                          </div>
+
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${
+                            isSelected 
+                              ? 'bg-violet-600 text-white' 
+                              : 'border-2 border-slate-300 dark:border-slate-600'
+                          }`}>
+                            {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAddMembersModal(false)}
+                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedGroupMembers.length === 0 || isCreatingGroup}
+                  onClick={() => activeRoomId && handleAddParticipantsToGroup(activeRoomId, selectedGroupMembers)}
+                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-black text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {isCreatingGroup ? (
+                    <>Adding...</>
+                  ) : (
+                    <>
+                      <UserPlus className="w-3.5 h-3.5" />
+                      Add to Group ({selectedGroupMembers.length})
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* CELEBRATORY FLAME STREAK MILESTONE MODAL */}
+      <AnimatePresence>
+        {streakMilestoneCelebration && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.8, opacity: 0, y: 30 }}
+              transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+              className="relative w-full max-w-md bg-white dark:bg-slate-900 border-2 border-amber-400/80 rounded-[32px] p-6 text-center shadow-2xl overflow-hidden"
+            >
+              {/* Concentric Flame Pulse Blast Rings */}
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center -top-24">
+                <div className="absolute w-72 h-72 rounded-full bg-gradient-to-tr from-amber-400/20 to-orange-500/20 blur-2xl animate-pulse" />
+                <div className="absolute w-48 h-48 rounded-full border-2 border-amber-400/30 animate-ping opacity-30" />
+              </div>
+
+              {/* Close icon */}
+              <button
+                onClick={() => setStreakMilestoneCelebration(null)}
+                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {/* Radiant Flame Graphic with Concentric Floating Sparks */}
+              <div className="relative mx-auto mt-2 mb-4 w-28 h-28 flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 blur-lg opacity-60 animate-pulse" />
+                <div className="relative w-24 h-24 rounded-full bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 p-0.5 shadow-xl flex items-center justify-center flame-celebration-glow">
+                  <div className="w-full h-full rounded-full bg-slate-900/90 flex items-center justify-center">
+                    <Flame className="w-14 h-14 text-amber-400 fill-amber-400 animate-bounce" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Badge level */}
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-black uppercase tracking-wider mb-2">
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                {streakMilestoneCelebration.level} Milestone
+              </div>
+
+              {/* Huge streak number */}
+              <div className="text-4xl font-black font-display tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 leading-none">
+                {streakMilestoneCelebration.streak} DAYS UNBROKEN!
+              </div>
+
+              <h2 className="text-lg font-black text-slate-900 dark:text-white mt-2">
+                {streakMilestoneCelebration.title}
+              </h2>
+
+              <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed px-4">
+                {streakMilestoneCelebration.description}
+              </p>
+
+              {/* Action Buttons */}
+              <div className="mt-6 flex flex-col sm:flex-row gap-2.5">
+                <button
+                  type="button"
+                  onPointerDown={handleButtonRipple}
+                  onClick={async () => {
+                    const postText = `🔥 Milestone Unlocked! Just achieved a ${streakMilestoneCelebration.streak}-day daily reflection streak on BaBU Student Hub! Staying consistent and leveling up every day. 🚀 #ReflectDaily #Milestone`;
+                    await handleCreateCustomPost(postText, 'public');
+                    setStreakMilestoneCelebration(null);
+                    showToast('🎉 Milestone shared to Student Feed!', 'success');
+                  }}
+                  className="ripple-parent relative overflow-hidden flex-1 py-3 px-4 rounded-2xl text-xs font-black text-white bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all"
+                >
+                  <Share2 className="w-4 h-4" />
+                  Share to Student Feed
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={handleButtonRipple}
+                  onClick={() => setStreakMilestoneCelebration(null)}
+                  className="ripple-parent relative overflow-hidden py-3 px-5 rounded-2xl text-xs font-black text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Keep the Flame Burning 🔥
+                </button>
               </div>
             </motion.div>
           </div>

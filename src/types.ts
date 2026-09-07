@@ -36,6 +36,7 @@ export interface Profile {
   achievements: string[];
   gems?: number;
   streakFreezes?: number;
+  blockedUsers?: string[];
   driveTokens?: {
     accessToken: string;
     refreshToken?: string;
@@ -117,17 +118,45 @@ export interface Message {
   audioDuration?: number;
 }
 
+export interface ParticipantProfile {
+  email: string;
+  displayName: string;
+  username: string;
+  avatarUrl: string;
+  frame?: AvatarFrame;
+  bio?: string;
+  statusNote?: string;
+  stats?: any;
+  online?: boolean;
+  isBlockedByMe?: boolean;
+  role?: 'admin' | 'member';
+}
+
 export interface ChatRoom {
   id: string;
+  name?: string;
+  isGroup?: boolean;
+  avatarUrl?: string;
+  groupAdminEmail?: string;
   participants: string[];
+  participantProfiles?: ParticipantProfile[];
   messages: Message[];
   typingEmails: string[];
   pinnedBy: string[];
   peer?: {
     email: string;
     displayName: string;
+    username?: string;
     avatarUrl: string;
     online: boolean;
+    isGroup?: boolean;
+    memberCount?: number;
+    frame?: AvatarFrame;
+    bio?: string;
+    statusNote?: string;
+    stats?: any;
+    isBlockedByMe?: boolean;
+    hasBlockedMe?: boolean;
   };
 }
 
